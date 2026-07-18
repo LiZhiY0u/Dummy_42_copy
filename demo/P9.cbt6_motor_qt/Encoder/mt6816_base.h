@@ -24,16 +24,18 @@ extern "C"
             uint16_t rawAngle;       // raw data，转成mt6816的14位数据
             uint16_t rectifiedAngle; // calibrated rawAngle data，校准的数据，实际上存放的是对应细分数
             bool rectifyValid;       // 校准成功并写入flash为true
+            bool sampleValid;        // latest SPI sample passed transport/parity/magnet checks
         } AngleData_t;
-        AngleData_t angleData{0};
+        AngleData_t angleData{};
 
         void Init();
 
         uint8_t _g = 0;
         void test();
         uint8_t test1();
-        uint16_t UpdateAngle(); // Get current rawAngle (rad)
+        bool UpdateAngle(); // Update angle and report whether the latest sample is valid
         bool IsCalibrated();
+        uint16_t GetConsecutiveErrorCount() const;
 
     private:
         typedef struct
@@ -49,11 +51,12 @@ extern "C"
         uint16_t dataTx[2];
         uint16_t dataRx[2];
         uint8_t hCount;
+        uint16_t consecutiveErrorCount = 0;
 
         /***** Port Specified Implements *****/
         void SpiInit();
 
-        uint16_t SpiTransmitAndRead16Bits(uint16_t _dataTx);
+        bool SpiTransmitAndRead16Bits(uint16_t _dataTx, uint16_t *_dataRx);
     };
 
     extern MT6816Base mt6816_base;

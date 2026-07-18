@@ -1,6 +1,58 @@
 #include "common_inc.h"
 #include "configurations.h"
 #include <can.h>
+#include <cstring>
+
+namespace
+{
+float ReadFloat32(const uint8_t *data)
+{
+    float value;
+    std::memcpy(&value, data, sizeof(value));
+    return value;
+}
+
+int32_t ReadInt32(const uint8_t *data)
+{
+    int32_t value;
+    std::memcpy(&value, data, sizeof(value));
+    return value;
+}
+
+uint32_t ReadUint32(const uint8_t *data)
+{
+    uint32_t value;
+    std::memcpy(&value, data, sizeof(value));
+    return value;
+}
+
+bool HasCommandLength(uint8_t command, uint32_t length)
+{
+    switch (command)
+    {
+    case 0x06:
+    case 0x07:
+        return length >= 8;
+    case 0x01:
+    case 0x03:
+    case 0x04:
+    case 0x05:
+    case 0x11:
+    case 0x12:
+    case 0x13:
+    case 0x14:
+    case 0x16:
+    case 0x17:
+    case 0x18:
+    case 0x19:
+    case 0x1A:
+    case 0x1B:
+        return length >= 4;
+    default:
+        return true;
+    }
+}
+}
 
 extern Motor motor;
 
@@ -49,6 +101,9 @@ void CAN_Send(CAN_TxHeaderTypeDef* pHeader, uint8_t* data)
 
 void OnCanCmd(uint8_t _cmd, uint8_t *_data, uint32_t _len)
 {
+    if (_data == nullptr || !HasCommandLength(_cmd, _len))
+        return;
+
     float tmpF;
     int32_t tmpI;
 
@@ -56,15 +111,17 @@ void OnCanCmd(uint8_t _cmd, uint8_t *_data, uint32_t _len)
     {
     // 0x00~0x0F No Memory CMDs
     case 0x01: // Enable Motor
-        motor.controller->requestMode = (*(uint32_t *)(RxData) == 1) ? Motor::MODE_COMMAND_VELOCITY : Motor::MODE_STOP;
+        motor.controller->requestMode = (ReadUint32(_data) == 1) ? Motor::MODE_COMMAND_VELOCITY : Motor::MODE_STOP;
         break;
     case 0x02: // Do Calibration
+        motor.controller->SetCtrlMode(Motor::MODE_STOP);
+        tb67h450_base.Sleep();
         encoder_calibrator_base.isTriggered = true;
         break;
     case 0x03: // Set Current SetPoint
         if (motor.controller->modeRunning != Motor::MODE_COMMAND_CURRENT)
             motor.controller->SetCtrlMode(Motor::MODE_COMMAND_CURRENT);
-        motor.controller->SetCurrentSetPoint((int32_t)(*(float *)RxData * 1000));
+        motor.controller->SetCurrentSetPoint((int32_t)(ReadFloat32(_data) * 1000));
         break;
     case 0x04: // Set Velocity SetPoint
         if (motor.controller->modeRunning != Motor::MODE_COMMAND_VELOCITY)
@@ -73,7 +130,7 @@ void OnCanCmd(uint8_t _cmd, uint8_t *_data, uint32_t _len)
             motor.controller->SetCtrlMode(Motor::MODE_COMMAND_VELOCITY);
         }
         motor.controller->SetVelocitySetPoint(
-            (int32_t)(*(float *)RxData *
+            (int32_t)(ReadFloat32(_data) *
                       (float)motor.MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS));
         break;
     case 0x05: // Set Position SetPoint
@@ -83,8 +140,8 @@ void OnCanCmd(uint8_t _cmd, uint8_t *_data, uint32_t _len)
             motor.controller->SetCtrlMode(Motor::MODE_COMMAND_POSITION);
         }
         motor.controller->SetPositionSetPoint(
-            (int32_t)(*(float *)RxData * (float)motor.MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS));
-        if (_data[4]) // Need Position & Finished ACK
+            (int32_t)(ReadFloat32(_data) * (float)motor.MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS));
+        if (_len >= 5 && _data[4]) // Need Position & Finished ACK
         {
             tmpF = motor.controller->GetPosition();
             auto *b = (unsigned char *)&tmpF;
@@ -99,18 +156,8 @@ void OnCanCmd(uint8_t _cmd, uint8_t *_data, uint32_t _len)
         if (motor.controller->modeRunning != Motor::MODE_COMMAND_POSITION)
             motor.controller->SetCtrlMode(Motor::MODE_COMMAND_POSITION);
         motor.controller->SetPositionSetPointWithTime(
-            (int32_t)(*(float *)RxData * (float)motor.MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS),
-            *(float *)(RxData + 4));
-        if (_data[4]) // Need Position & Finished ACK
-        {
-            tmpF = motor.controller->GetPosition();
-            auto *b = (unsigned char *)&tmpF;
-            for (int i = 0; i < 4; i++)
-                _data[i] = *(b + i);
-            _data[4] = motor.controller->state == Motor::STATE_FINISH ? 1 : 0;
-            txHeader.StdId = (boardConfig.canNodeId << 7) | 0x23;
-            CAN_Send(&txHeader, _data);
-        }
+            (int32_t)(ReadFloat32(_data) * (float)motor.MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS),
+            ReadFloat32(_data + 4));
         break;
     case 0x07: // Set Position with Velocity-Limit
     {
@@ -120,9 +167,9 @@ void OnCanCmd(uint8_t _cmd, uint8_t *_data, uint32_t _len)
             motor.controller->SetCtrlMode(Motor::MODE_COMMAND_POSITION);
         }
         motor.config.motionParams.ratedVelocity =
-            (int32_t)(*(float *)(RxData + 4) * (float)motor.MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS);
+            (int32_t)(ReadFloat32(_data + 4) * (float)motor.MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS);
         motor.controller->SetPositionSetPoint(
-            (int32_t)(*(float *)RxData * (float)motor.MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS));
+            (int32_t)(ReadFloat32(_data) * (float)motor.MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS));
         // Always Need Position & Finished ACK
         tmpF = motor.controller->GetPosition();
         auto *b = (unsigned char *)&tmpF;
@@ -136,32 +183,37 @@ void OnCanCmd(uint8_t _cmd, uint8_t *_data, uint32_t _len)
 
         // 0x10~0x1F CMDs with Memory
     case 0x11: // Set Node-ID and Store to EEPROM
-        boardConfig.canNodeId = *(uint32_t *)(RxData);
-        if (_data[4])
+    {
+        const uint32_t nodeId = ReadUint32(_data);
+        if (nodeId > 0x0FU)
+            break;
+        boardConfig.canNodeId = nodeId;
+        if (_len >= 5 && _data[4])
             boardConfig.configStatus = CONFIG_COMMIT;
         break;
+    }
     case 0x12: // Set Current-Limit and Store to EEPROM
-        motor.config.motionParams.ratedCurrent = (int32_t)(*(float *)RxData * 1000);
+        motor.config.motionParams.ratedCurrent = (int32_t)(ReadFloat32(_data) * 1000);
         boardConfig.currentLimit = motor.config.motionParams.ratedCurrent;
-        if (_data[4])
+        if (_len >= 5 && _data[4])
             boardConfig.configStatus = CONFIG_COMMIT;
         break;
     case 0x13: // Set Velocity-Limit and Store to EEPROM
         motor.config.motionParams.ratedVelocity =
-            (int32_t)(*(float *)RxData *
+            (int32_t)(ReadFloat32(_data) *
                       (float)motor.MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS);
         boardConfig.velocityLimit = motor.config.motionParams.ratedVelocity;
-        if (_data[4])
+        if (_len >= 5 && _data[4])
             boardConfig.configStatus = CONFIG_COMMIT;
         break;
     case 0x14: // Set Acceleration （and Store to EEPROM）
-        tmpF = *(float *)RxData * (float)motor.MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS;
+        tmpF = ReadFloat32(_data) * (float)motor.MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS;
 
         motor.config.motionParams.ratedVelocityAcc = (int32_t)tmpF;
         motor.motionPlanner.velocityTracker.SetVelocityAcc((int32_t)tmpF);
         motor.motionPlanner.positionTracker.SetVelocityAcc((int32_t)tmpF);
         boardConfig.velocityAcc = motor.config.motionParams.ratedVelocityAcc;
-        if (_data[4])
+        if (_len >= 5 && _data[4])
             boardConfig.configStatus = CONFIG_COMMIT;
         break;
     case 0x15: // Apply Home-Position and Store to EEPROM
@@ -171,38 +223,38 @@ void OnCanCmd(uint8_t _cmd, uint8_t *_data, uint32_t _len)
         boardConfig.configStatus = CONFIG_COMMIT;
         break;
     case 0x16: // Set Auto-Enable and Store to EEPROM
-        boardConfig.enableMotorOnBoot = (*(uint32_t *)(RxData) == 1);
-        if (_data[4])
+        boardConfig.enableMotorOnBoot = (ReadUint32(_data) == 1);
+        if (_len >= 5 && _data[4])
             boardConfig.configStatus = CONFIG_COMMIT;
         break;
     case 0x17: // Set DCE Kp
-        motor.config.ctrlParams.dce.kp = *(int32_t *)(RxData);
+        motor.config.ctrlParams.dce.kp = ReadInt32(_data);
         boardConfig.dce_kp = motor.config.ctrlParams.dce.kp;
-        if (_data[4])
+        if (_len >= 5 && _data[4])
             boardConfig.configStatus = CONFIG_COMMIT;
         break;
     case 0x18: // Set DCE Kv
-        motor.config.ctrlParams.dce.kv = *(int32_t *)(RxData);
+        motor.config.ctrlParams.dce.kv = ReadInt32(_data);
         boardConfig.dce_kv = motor.config.ctrlParams.dce.kv;
-        if (_data[4])
+        if (_len >= 5 && _data[4])
             boardConfig.configStatus = CONFIG_COMMIT;
         break;
     case 0x19: // Set DCE Ki
-        motor.config.ctrlParams.dce.ki = *(int32_t *)(RxData);
+        motor.config.ctrlParams.dce.ki = ReadInt32(_data);
         boardConfig.dce_ki = motor.config.ctrlParams.dce.ki;
-        if (_data[4])
+        if (_len >= 5 && _data[4])
             boardConfig.configStatus = CONFIG_COMMIT;
         break;
     case 0x1A: // Set DCE Kd
-        motor.config.ctrlParams.dce.kd = *(int32_t *)(RxData);
+        motor.config.ctrlParams.dce.kd = ReadInt32(_data);
         boardConfig.dce_kd = motor.config.ctrlParams.dce.kd;
-        if (_data[4])
+        if (_len >= 5 && _data[4])
             boardConfig.configStatus = CONFIG_COMMIT;
         break;
     case 0x1B: // Set Enable Stall-Protect
-        motor.config.ctrlParams.stallProtectSwitch = (*(uint32_t *)(RxData) == 1);
+        motor.config.ctrlParams.stallProtectSwitch = (ReadUint32(_data) == 1);
         boardConfig.enableStallProtect = motor.config.ctrlParams.stallProtectSwitch;
-        if (_data[4])
+        if (_len >= 5 && _data[4])
             boardConfig.configStatus = CONFIG_COMMIT;
         break;
 

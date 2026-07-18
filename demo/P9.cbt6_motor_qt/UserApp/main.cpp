@@ -32,40 +32,14 @@ uint8_t rec_buff[100] = {0};
 
 extern "C" void Main()
 {
-    __HAL_UART_ENABLE_IT(&huart1, UART_IT_IDLE);
-
-    HAL_TIM_Base_Start_IT(&htim1);
-    HAL_TIM_Base_Start_IT(&htim4);
-    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3);
-    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4);
-    // motor.AttachEncoder(&mt6816_base);
-    // _g = 100;
-    // tb67h450_base.SetFocCurrentVector(100, 1000);
-
-    encoder_calibrator_base.isTriggered = 1;
-    encoder_calibrator_base.errorCode = EncoderCalibratorBase::CALI_NO_ERROR;
-    encoder_calibrator_base.state = EncoderCalibratorBase::CALI_DISABLE;
-    encoder_calibrator_base.goPosition = 0;
-    encoder_calibrator_base.rcdX = 0;
-    encoder_calibrator_base.rcdY = 0;
-    encoder_calibrator_base.resultNum = 0;
-
-    mt6816_base.Init();
-    motor.controller->Init();
-
-    // HAL_UART_Receive_DMA(&huart1, rx_buffer, 128);
-    HAL_UARTEx_ReceiveToIdle_DMA(&huart1, rec_buff, 100);
-
-    motor.AttachEncoder(&mt6816_base);
-
     boardConfig = BoardConfig_t{
         .configStatus = CONFIG_OK,
-        // .canNodeId = defaultNodeID,
+        .canNodeId = 1,
         .encoderHomeOffset = 0,
         .defaultMode = Motor::MODE_COMMAND_POSITION,
-        .currentLimit = 1 * 1000,                                     // A
-        .velocityLimit = 30 * motor.MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS, // r/s,51200*30
-        .velocityAcc = 1000000,                                       // r/s^2,5120000
+        .currentLimit = 1 * 1000,
+        .velocityLimit = 30 * motor.MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS,
+        .velocityAcc = 1000000,
         .calibrationCurrent = 2000,
         .dce_kp = 200,
         .dce_kv = 80,
@@ -74,9 +48,40 @@ extern "C" void Main()
         .enableMotorOnBoot = false,
         .enableStallProtect = false};
 
+    encoder_calibrator_base.isTriggered = false;
+    encoder_calibrator_base.errorCode = EncoderCalibratorBase::CALI_NO_ERROR;
+    encoder_calibrator_base.state = EncoderCalibratorBase::CALI_DISABLE;
+    encoder_calibrator_base.goPosition = 0;
+    encoder_calibrator_base.rcdX = 0;
+    encoder_calibrator_base.rcdY = 0;
+    encoder_calibrator_base.resultNum = 0;
+
+    motor.AttachEncoder(&mt6816_base);
+    motor.config.motionParams.encoderHomeOffset = boardConfig.encoderHomeOffset;
+    motor.config.motionParams.caliCurrent = boardConfig.calibrationCurrent;
+    motor.config.motionParams.ratedCurrent = boardConfig.currentLimit;
+    motor.config.motionParams.ratedVelocity = boardConfig.velocityLimit;
+    motor.config.motionParams.ratedVelocityAcc = boardConfig.velocityAcc;
+    motor.config.ctrlParams.dce.kp = boardConfig.dce_kp;
+    motor.config.ctrlParams.dce.kv = boardConfig.dce_kv;
+    motor.config.ctrlParams.dce.ki = boardConfig.dce_ki;
+    motor.config.ctrlParams.dce.kd = boardConfig.dce_kd;
+    motor.config.ctrlParams.stallProtectSwitch = boardConfig.enableStallProtect;
     motor.motionPlanner.velocityTracker.SetVelocityAcc(boardConfig.velocityAcc);
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, 500);
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, 900);
+    motor.motionPlanner.positionTracker.SetVelocityAcc(boardConfig.velocityAcc);
+
+    mt6816_base.Init();
+    motor.controller->Init();
+
+    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3);
+    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4);
+    tb67h450_base.Sleep();
+
+    if (HAL_UARTEx_ReceiveToIdle_DMA(&huart1, rec_buff, sizeof(rec_buff)) == HAL_OK)
+        __HAL_DMA_DISABLE_IT(huart1.hdmarx, DMA_IT_HT);
+
+    HAL_TIM_Base_Start_IT(&htim1);
+    HAL_TIM_Base_Start_IT(&htim4);
 
     for (;;)
     {
@@ -100,7 +105,6 @@ extern "C" void Main()
 
 extern "C" void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-    static uint32_t goPosition = 0;
     if (htim == &htim1)
     {
         Upload_estvelocity();
@@ -175,7 +179,7 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *CanHandle)
 
     uint8_t id = (RxHeader.StdId >> 7);  // 4Bits ID & 7Bits Msg
     uint8_t cmd = RxHeader.StdId & 0x7F; // 4Bits ID & 7Bits Msg
-    if (id == 0 || id == 1)
+    if (id == 0 || id == boardConfig.canNodeId)
     {
         OnCanCmd(cmd, RxData, RxHeader.DLC);
     }

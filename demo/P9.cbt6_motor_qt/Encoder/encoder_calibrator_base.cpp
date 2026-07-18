@@ -164,14 +164,13 @@ void EncoderCalibratorBase::CalibrationDataCheck()
 // 默认1000电流，获取到每1.8度对应的编码器数据，包括正转和反转
 void EncoderCalibratorBase::Tick20kHz()
 {
-    mt6816_base.UpdateAngle();
-
-    static bool _flag = 1;
-    if (_flag)
+    if (!mt6816_base.UpdateAngle())
     {
+        tb67h450_base.Sleep();
+        errorCode = CALI_ERROR_ENCODER;
         state = CALI_DISABLE;
-        isTriggered = true;
-        _flag = 0;
+        isTriggered = false;
+        return;
     }
 
     switch (state)

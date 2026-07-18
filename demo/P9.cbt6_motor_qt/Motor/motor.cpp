@@ -8,7 +8,13 @@
 void Motor::Tick20kHz()
 {
     // 1.Encoder data Update，获取mt6816校准值
-    mt6816_base.UpdateAngle();
+    if (!mt6816_base.UpdateAngle())
+    {
+        controller->ClearIntegral();
+        controller->state = STATE_ENCODER_FAULT;
+        tb67h450_base.Sleep();
+        return;
+    }
 
     // 2.Motor Control Update
     CloseLoopControlTick();
@@ -94,24 +100,15 @@ void Motor::CloseLoopControlTick()
     controller->estError = controller->softPosition - controller->estPosition;
 
     /************************************ Ctrl Loop ************************************/
-    // if (controller->isStalled ||
-    //     controller->softDisable ||
-    //     !mt6816_base.IsCalibrated()) // 首次会进入
-    // {
-    //     controller->ClearIntegral(); // clear integrals
-    //     controller->focPosition = 0; // clear outputs
-    //     controller->focCurrent = 0;
-    //     tb67h450_base.Sleep();
-    // }
-
-    static bool _flag1 = 0;
-    if (_flag1 == 0)
+    if (controller->isStalled ||
+        controller->softDisable ||
+        !mt6816_base.IsCalibrated() ||
+        !mt6816_base.angleData.sampleValid)
     {
         controller->ClearIntegral(); // clear integrals
         controller->focPosition = 0; // clear outputs
         controller->focCurrent = 0;
         tb67h450_base.Sleep();
-        _flag1 = 1;
     }
 
     else if (controller->softBrake)

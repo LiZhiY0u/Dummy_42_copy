@@ -23,6 +23,7 @@ extern "C"
             CALI_ERROR_AVERAGE_CONTINUTY,
             CALI_ERROR_PHASE_STEP,
             CALI_ERROR_ANALYSIS_QUANTITY,
+            CALI_ERROR_ENCODER,
         } Error_t;
 
         typedef enum

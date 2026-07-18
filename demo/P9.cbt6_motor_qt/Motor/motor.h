@@ -67,7 +67,8 @@ extern "C"
             STATE_RUNNING,
             STATE_OVERLOAD,
             STATE_STALL,
-            STATE_NO_CALIB
+            STATE_NO_CALIB,
+            STATE_ENCODER_FAULT
         } State_t;
 
         class Controller
