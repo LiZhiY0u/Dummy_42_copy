@@ -1,6 +1,6 @@
 #include "ProtocolMessages.h"
 #include <QtEndian>
-#include <QSet>
+#include "../../../firmware/core/command_contract.h"
 #include <limits>
 
 namespace {
@@ -13,7 +13,6 @@ template<typename T> void append(QByteArray &bytes, T value) {
     bytes.append(reinterpret_cast<const char *>(&little), sizeof(T));
 }
 bool positive32(quint32 value) { return value > 0 && value <= MaxSigned; }
-bool signedValue(qint32 value) { return value != std::numeric_limits<qint32>::min(); }
 bool validInfo(const DeviceInfo &info) {
     return info.protocolRevision==1 && info.uid.size()==12 && positive32(info.unitsPerRev)
         && positive32(info.currentMaxMa) && positive32(info.calibrationMaxMa)
@@ -23,40 +22,8 @@ bool validInfo(const DeviceInfo &info) {
 
 Status ProtocolMessages::validateParameters(const QByteArray &bytes)
 {
-    if (bytes.size()<4 || bytes.size()>128 || read<quint16>(bytes,0)!=1) return Status::BadPayload;
-    const quint16 count=read<quint16>(bytes,2);
-    if (count==0 || count>15) return Status::BadPayload;
-    QSet<quint16> ids;
-    int offset=4;
-    for (int index=0; index<count; ++index) {
-        if (offset+4>bytes.size()) return Status::BadPayload;
-        const quint16 id=read<quint16>(bytes,offset);
-        const quint8 type=quint8(bytes[offset+2]), size=quint8(bytes[offset+3]);
-        if (ids.contains(id)) return Status::BadPayload;
-        ids.insert(id);
-        quint8 expectedType=0;
-        if ((id>=1 && id<=4) || (id>=0x0401 && id<=0x0403)) expectedType=2;
-        else if ((id>=0x0101 && id<=0x0103) || (id>=0x0201 && id<=0x0204)) expectedType=1;
-        else if (id==0x0301) expectedType=3;
-        else return Status::BadPayload;
-        if (type!=expectedType || size!=(type==3 ? 1 : 4) || offset+4+size>bytes.size()) return Status::BadPayload;
-        offset+=4;
-        if (type==1) {
-            const qint32 gain=read<qint32>(bytes,offset);
-            const qint32 maximum=(id<=0x0103 ? 255 : 4095);
-            if (gain<0 || gain>maximum) return Status::OutOfRange;
-        } else if (type==3) {
-            if (quint8(bytes[offset])>1) return Status::OutOfRange;
-        } else {
-            const quint32 value=read<quint32>(bytes,offset);
-            if (id<=4 && !positive32(value)) return Status::OutOfRange;
-            if (id==0x0401 && (value==0 || value>51200)) return Status::OutOfRange;
-            if (id==0x0402 && value>51200) return Status::OutOfRange;
-            if (id==0x0403 && (value<10 || value>2000)) return Status::OutOfRange;
-        }
-        offset+=size;
-    }
-    return offset==bytes.size() ? Status::Ok : Status::BadPayload;
+    return Status(stepper::contract::validatePayload(0x0202,
+        reinterpret_cast<const uint8_t *>(bytes.constData()),size_t(bytes.size())));
 }
 
 Status ProtocolMessages::validateRequest(const Frame &frame)
@@ -66,39 +33,9 @@ Status ProtocolMessages::validateRequest(const Frame &frame)
     const auto &bytes=frame.payload;
     if (command==Command::Hello) {
         if (frame.session!=0) return Status::BadSession;
-        return bytes.size()==4 && read<quint32>(bytes,0)!=0 ? Status::Ok : Status::BadPayload;
-    }
-    if (frame.session==0) return Status::BadSession;
-    switch (command) {
-    case Command::GetInfo: case Command::GetStatus: case Command::Heartbeat:
-    case Command::Disable: case Command::Stop: case Command::SetZero:
-    case Command::ClearFault: case Command::ReadParams: case Command::CalibrateStart:
-        return bytes.isEmpty() ? Status::Ok : Status::BadPayload;
-    case Command::Enable:
-        if (bytes.size()!=1) return Status::BadPayload;
-        return quint8(bytes[0])<=2 ? Status::Ok : Status::OutOfRange;
-    case Command::MoveAbsolute:
-        if (bytes.size()!=12) return Status::BadPayload;
-        return positive32(read<quint32>(bytes,4)) && positive32(read<quint32>(bytes,8)) ? Status::Ok : Status::OutOfRange;
-    case Command::SetVelocity:
-        if (bytes.size()!=8) return Status::BadPayload;
-        return signedValue(read<qint32>(bytes,0)) && positive32(read<quint32>(bytes,4)) ? Status::Ok : Status::OutOfRange;
-    case Command::SetCurrent:
-        if (bytes.size()!=4) return Status::BadPayload;
-        return signedValue(read<qint32>(bytes,0)) ? Status::Ok : Status::OutOfRange;
-    case Command::SaveParams:
-        return bytes.size()==4 ? Status::Ok : Status::BadPayload;
-    case Command::TaskQuery: case Command::CalibrateQuery: case Command::CalibrateCancel:
-        if (bytes.size()!=4) return Status::BadPayload;
-        return read<quint32>(bytes,0)!=0 ? Status::Ok : Status::OutOfRange;
-    case Command::WriteParams: return validateParameters(bytes);
-    case Command::TelemetryConfig: {
-        if (bytes.size()!=2) return Status::BadPayload;
-        const quint16 period=read<quint16>(bytes,0);
-        return period==0 || period==10 || period==20 || period==50 || period==100 ? Status::Ok : Status::OutOfRange;
-    }
-    default: return Status::UnknownCommand;
-    }
+    } else if (frame.session==0) return Status::BadSession;
+    return Status(stepper::contract::validatePayload(frame.command,
+        reinterpret_cast<const uint8_t *>(bytes.constData()),size_t(bytes.size())));
 }
 
 QByteArray ProtocolMessages::encodeSnapshot(const Snapshot &value)
