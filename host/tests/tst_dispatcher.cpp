@@ -1,5 +1,6 @@
 #include <QtTest>
 #include "command_dispatcher.h"
+#include "command_contract.h"
 #include "control_gate.h"
 #include "protocol/ProtocolCodec.h"
 #include "protocol/ProtocolMessages.h"
@@ -42,6 +43,78 @@ class DispatcherTest : public QObject {
     uint16_t status(const stepper::Frame &response){return uint16_t(response.payload[0])|(uint16_t(response.payload[1])<<8);}
     void hello(stepper::CommandDispatcher &d,uint32_t now=0,uint16_t seq=1) {stepper::Frame response;QVERIFY(d.handle(request(1,seq,0,QByteArray::fromHex("07000000")),now,response));QCOMPARE(status(response),uint16_t(0));}
 private slots:
+    void contractIndependentVectors() {
+        using namespace stepper::contract;
+        const uint16_t commands[]={1,2,3,4,5,0x0101,0x0102,0x0103,0x0104,0x0105,0x0106,0x0107,0x0108,0x0201,0x0202,0x0203,0x0301,0x0302,0x0303,0x0401};
+        const char *hex[]={"07000000","","","","01000000","00","","ffffffff0100000001000000","ffffffff01000000","ffffffff","","","","","010001000101010420000000","07000000","","01000000","01000000","0a00"};
+        for(unsigned i=0;i<20;++i) {
+            const auto p=QByteArray::fromHex(hex[i]);
+            const auto descriptor=describe(commands[i]);QVERIFY(descriptor);QCOMPARE(descriptor->ordinal,uint8_t(i));
+            QCOMPARE(validatePayload(commands[i],reinterpret_cast<const uint8_t*>(p.constData()),size_t(p.size())),uint16_t(0));
+            Frame qt;qt.sequence=1;qt.session=commands[i]==1?0:7;qt.command=commands[i];qt.payload=p;
+            QCOMPARE(ProtocolMessages::validateRequest(qt),Status::Ok);
+            const auto extra=p+QByteArray(1,0);
+            QCOMPARE(validatePayload(commands[i],reinterpret_cast<const uint8_t*>(extra.constData()),size_t(extra.size())),uint16_t(3));
+            for(int length=0;length<=128;++length) {
+                qt.payload=QByteArray(length,0);
+                QCOMPARE(validatePayload(commands[i],reinterpret_cast<const uint8_t*>(qt.payload.constData()),size_t(length)),uint16_t(ProtocolMessages::validateRequest(qt)));
+            }
+        }
+        for(uint16_t command:{uint16_t(0x0402),uint16_t(0x0501),uint16_t(0x0502),uint16_t(0xaaaa)}) {
+            QVERIFY(!describe(command));QCOMPARE(validatePayload(command,nullptr,0),uint16_t(2));
+        }
+    }
+    void contractBoundaryFailures() {
+        using namespace stepper::contract;
+        QCOMPARE(validatePayload(2,nullptr,0),uint16_t(0));
+        QCOMPARE(validatePayload(2,nullptr,1),uint16_t(3));
+        QCOMPARE(validatePayload(2,nullptr,129),uint16_t(3));
+        struct Vector {uint16_t cmd;const char *hex;uint16_t status;};
+        const Vector vectors[]={
+            {1,"00000000",3},{5,"00000000",4},{0x0302,"00000000",4},{0x0303,"00000000",4},
+            {0x0101,"03",4},{0x0105,"00000080",4},{0x0105,"ffffff7f",0},
+            {0x0104,"0000008001000000",4},{0x0104,"0000000000000000",4},
+            {0x0103,"000000000000000001000000",4},{0x0103,"000000000100000000000080",4},
+            {0x0103,"00000080ffffff7fffffff7f",0},
+            {0x0401,"0000",0},{0x0401,"1400",0},{0x0401,"3200",0},{0x0401,"6400",0},{0x0401,"0100",4},
+            {0x0202,"01000000",3},{0x0202,"01001000",3},{0x0202,"020001000101010400000000",3},
+            {0x0202,"0100020001010104200000000101010421000000",3},
+            {0x0202,"01000100ffff010400000000",3},{0x0202,"010001000101020400000000",3},
+            {0x0202,"0100010001010103000000",3},{0x0202,"0100010001010104",3},
+            {0x0202,"010001000101010400010000",4},{0x0202,"010001000102010400100000",4},
+            {0x0202,"010001000103030102",4},{0x0202,"010001000100020400000000",4},
+            {0x0202,"010001000104020401c80000",4},{0x0202,"010001000204020401c80000",4},
+            {0x0202,"010001000304020409000000",4},{0x0202,"0100010003040204d1070000",4}
+        };
+        for(const auto &v:vectors) {const auto p=QByteArray::fromHex(v.hex);QCOMPARE(validatePayload(v.cmd,reinterpret_cast<const uint8_t*>(p.constData()),size_t(p.size())),v.status);}
+        const auto all=QByteArray::fromHex("01000f00"
+            "0100020401000000020002040100000003000204010000000400020401000000"
+            "010101040000000002010104ff0000000301010400000000"
+            "01020104ff0f0000020201040000000003020104000000000402010400000000"
+            "01030301010104020400c80000020402040000000003040204d0070000");
+        QCOMPARE(validatePayload(0x0202,reinterpret_cast<const uint8_t*>(all.constData()),size_t(all.size())),uint16_t(0));
+        Frame qt;qt.command=3;qt.sequence=1;qt.session=7;qt.type=FrameType::Event;
+        QCOMPARE(ProtocolMessages::validateRequest(qt),Status::BadPayload);
+        qt.type=FrameType::Request;qt.sequence=0;QCOMPARE(ProtocolMessages::validateRequest(qt),Status::BadPayload);
+        qt.sequence=1;qt.session=0;QCOMPARE(ProtocolMessages::validateRequest(qt),Status::BadSession);
+        qt.command=1;qt.session=7;qt.payload=QByteArray::fromHex("07000000");QCOMPARE(ProtocolMessages::validateRequest(qt),Status::BadSession);
+    }
+    void contractCapabilitiesRequireBackendSupport() {
+        using namespace stepper::contract;
+        auto support=[](std::initializer_list<uint16_t> commands) {Support s={0};for(auto c:commands)s.commandBits|=uint32_t(1)<<describe(c)->ordinal;return s;};
+        QCOMPARE(capabilities(Support{0}),uint32_t(0));
+        QCOMPARE(capabilities(Support{0xfff00000}),uint32_t(0));
+        QCOMPARE(capabilities(support({1,2,3,4,0x0101,0x0102,0x0106,0x0108,0x0401})),uint32_t(0x180));
+        QCOMPARE(capabilities(support({0x0201})),uint32_t(0));QCOMPARE(capabilities(support({0x0202})),uint32_t(0));
+        QCOMPARE(capabilities(support({0x0201,0x0202})),uint32_t(8));
+        QCOMPARE(capabilities(support({0x0103,0x0104,0x0105})),uint32_t(0));
+        QCOMPARE(capabilities(support({0x0101,0x0103,0x0104,0x0105})),uint32_t(7));
+        QCOMPARE(capabilities(support({0x0203})),uint32_t(0));QCOMPARE(capabilities(support({5,0x0203})),uint32_t(16));
+        QCOMPARE(capabilities(support({0x0301,0x0302,0x0303})),uint32_t(0));
+        QCOMPARE(capabilities(support({5,0x0301,0x0302,0x0303})),uint32_t(32));
+        QCOMPARE(capabilities(support({0x0107,0x0108,0x0401})),uint32_t(0x1c0));
+        QVERIFY(!supports(Support{0xffffffff},0xaaaa));
+    }
     void duplicatesReturnIdenticalResponseAndNeverExecuteTwice() {
         TestBackend b;stepper::CommandDispatcher d(b);hello(d);stepper::Frame first,second;
         const auto r=request(0x0101,2,7,QByteArray(1,1));d.handle(r,1,first);d.handle(r,2,second);
