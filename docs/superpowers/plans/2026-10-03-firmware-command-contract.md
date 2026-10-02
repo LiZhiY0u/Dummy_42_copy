@@ -105,7 +105,7 @@ QCOMPARE(validatePayload(0x0105,minimum,4),uint16_t(4));
 ```powershell
 $compiler = 'E:/keil5_2_4/ARM/ARMCLANG/bin/armclang.exe'
 $includes = @('Core/Inc','Drivers/STM32F1xx_HAL_Driver/Inc','Drivers/STM32F1xx_HAL_Driver/Inc/Legacy','Drivers/CMSIS/Device/ST/STM32F1xx/Include','Drivers/CMSIS/Include','UserApp','Motor','Encoder','Driver','Memory','Button','Uart') | ForEach-Object { '-I' + $_ }
-& $compiler --target=arm-arm-none-eabi -mcpu=cortex-m3 -mthumb -Oz -std=c++11 -fno-exceptions -fno-rtti -fshort-enums -fshort-wchar -ffunction-sections -fdata-sections -DUSE_HAL_DRIVER -DSTM32F103xB @includes -c Uart/uart_protocol.cpp -o MDK-ARM/cbt6_demo3/uart_protocol.o
+& $compiler --target=arm-arm-none-eabi -mcpu=cortex-m3 -mthumb -Oz -g -std=c++11 -fno-exceptions -fno-rtti -fshort-enums -fshort-wchar -ffunction-sections -fdata-sections -DUSE_HAL_DRIVER -DSTM32F103xB @includes -c Uart/uart_protocol.cpp -o MDK-ARM/cbt6_demo3/uart_protocol.o
 Push-Location MDK-ARM
 try { & 'E:/keil5_2_4/ARM/ARMCLANG/bin/armlink.exe' --via cbt6_demo3/cbt6_demo3.lnp } finally { Pop-Location }
 ./tests/check-stack.ps1 -Mode normal
