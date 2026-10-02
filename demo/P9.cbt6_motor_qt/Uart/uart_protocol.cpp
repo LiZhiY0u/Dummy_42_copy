@@ -4,6 +4,7 @@
 #include "configurations.h"
 #include "control_service.h"
 #include "protocol_v1.h"
+#include "command_support.h"
 #include <string.h>
 
 volatile uint32_t uartDiagRxBytes = 0;
@@ -15,9 +16,6 @@ volatile uint32_t uartDiagControlTicks = 0;
 namespace
 {
 const uint16_t STATUS_OK = 0;
-const uint16_t STATUS_UNKNOWN_CMD = 2;
-const uint16_t STATUS_BAD_PAYLOAD = 3;
-const uint16_t STATUS_OUT_OF_RANGE = 4;
 const uint16_t STATUS_WRONG_STATE = 5;
 const uint16_t STATUS_BUSY = 8;
 const uint16_t STATUS_UNSUPPORTED = 10;
@@ -319,25 +317,13 @@ void appendInfo(stepper::Frame &response)
     write32(p + 18, HAL_GetUIDw2());
     // Feature bits describe complete usable command groups, not merely
     // selectable controller modes. Motion targets are still unsupported.
-    write32(p + 22, 0x00000180UL); // CLEAR_FAULT | TELEMETRY
+    write32(p + 22, stepper::contract::capabilities(stepper::p9::supportedCommands()));
     write32(p + 26, uint32_t(motor.MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS));
     write32(p + 30, uint32_t(boardConfig.currentLimit));
     write32(p + 34, uint32_t(boardConfig.calibrationCurrent));
     write32(p + 38, uint32_t(boardConfig.velocityLimit));
     write32(p + 42, uint32_t(boardConfig.velocityAcc));
     write32(p + 46, 1);
-}
-
-bool validTelemetryPeriod(uint16_t period)
-{
-    return period == 0 || period == 10 || period == 20 || period == 50 || period == 100;
-}
-
-bool knownButUnsupported(uint16_t command)
-{
-    return command == 0x0005 || (command >= 0x0103 && command <= 0x0105) ||
-           command == 0x0107 || (command >= 0x0201 && command <= 0x0203) ||
-           (command >= 0x0301 && command <= 0x0303);
 }
 
 bool queueControl(const stepper::Frame &request, stepper::ControlKind kind,
@@ -416,14 +402,21 @@ void handleFrame(void *, const stepper::Frame &request)
         return;
     }
 
+    const uint16_t checked = stepper::contract::validatePayload(request.command, request.payload, request.length);
+    if (checked)
+    {
+        sendAndRemember(request, makeResponse(request, checked), nowMs);
+        return;
+    }
+    if (!stepper::contract::supports(stepper::p9::supportedCommands(), request.command))
+    {
+        sendAndRemember(request, makeResponse(request, STATUS_UNSUPPORTED), nowMs);
+        return;
+    }
+
     stepper::Frame &response = makeResponse(request, STATUS_OK);
     if (hello)
     {
-        if (request.length != 4 || !read32(request.payload))
-        {
-            sendAndRemember(request, makeResponse(request, STATUS_BAD_PAYLOAD), nowMs);
-            return;
-        }
         if (read32(request.payload) != activeSession &&
             (encoder_calibrator_base.isTriggered ||
              motor.controller->modeRunning != Motor::MODE_STOP))
@@ -440,69 +433,48 @@ void handleFrame(void *, const stepper::Frame &request)
     switch (request.command)
     {
     case CMD_GET_INFO:
-        if (request.length)
-            response = makeResponse(request, STATUS_BAD_PAYLOAD);
-        else
-            appendInfo(response);
+        appendInfo(response);
         sendAndRemember(request, response, nowMs);
         return;
     case CMD_GET_STATUS:
-        if (request.length)
-            response = makeResponse(request, STATUS_BAD_PAYLOAD);
-        else if (queueControl(request, stepper::ControlKind::ReadState, 3, activeSession))
+        if (queueControl(request, stepper::ControlKind::ReadState, 3, activeSession))
             return;
         else
             response = makeResponse(request, STATUS_BUSY);
         break;
     case CMD_HEARTBEAT:
-        if (request.length)
-            response = makeResponse(request, STATUS_BAD_PAYLOAD);
-        else if (queueControl(request, stepper::ControlKind::Heartbeat, 3, activeSession))
+        if (queueControl(request, stepper::ControlKind::Heartbeat, 3, activeSession))
             return;
         else
             response = makeResponse(request, STATUS_BUSY);
         break;
     case CMD_ENABLE:
-        if (request.length != 1)
-            response = makeResponse(request, STATUS_BAD_PAYLOAD);
-        else if (request.payload[0] > 2)
-            response = makeResponse(request, STATUS_OUT_OF_RANGE);
-        else if (queueControl(request, stepper::ControlKind::Enable, request.payload[0], activeSession))
+        if (queueControl(request, stepper::ControlKind::Enable, request.payload[0], activeSession))
             return;
         else
             response = makeResponse(request, STATUS_BUSY);
         break;
     case CMD_DISABLE:
     case CMD_STOP:
-        if (request.length)
-            response = makeResponse(request, STATUS_BAD_PAYLOAD);
-        else if (queueControl(request, stepper::ControlKind::Stop, 3, activeSession))
+        if (queueControl(request, stepper::ControlKind::Stop, 3, activeSession))
             return;
         else
             response = makeResponse(request, STATUS_BUSY);
         break;
     case CMD_CLEAR_FAULT:
-        if (request.length)
-            response = makeResponse(request, STATUS_BAD_PAYLOAD);
-        else if (queueControl(request, stepper::ControlKind::ClearFault, 3, activeSession))
+        if (queueControl(request, stepper::ControlKind::ClearFault, 3, activeSession))
             return;
         else
             response = makeResponse(request, STATUS_BUSY);
         break;
     case CMD_TELEMETRY_CONFIG:
-        if (request.length != 2)
-            response = makeResponse(request, STATUS_BAD_PAYLOAD);
-        else if (!validTelemetryPeriod(read16(request.payload)))
-            response = makeResponse(request, STATUS_OUT_OF_RANGE);
-        else
-        {
-            telemetryPeriodMs = read16(request.payload);
-            response.length = 4;
-            write16(response.payload + 2, telemetryPeriodMs);
-        }
+        telemetryPeriodMs = read16(request.payload);
+        response.length = 4;
+        write16(response.payload + 2, telemetryPeriodMs);
         break;
     default:
-        response = makeResponse(request, knownButUnsupported(request.command) ? STATUS_UNSUPPORTED : STATUS_UNKNOWN_CMD);
+        // Fail closed if a declared backend was not added to this switch.
+        response = makeResponse(request, STATUS_UNSUPPORTED);
         break;
     }
     sendAndRemember(request, response, nowMs);

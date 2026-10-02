@@ -113,6 +113,10 @@ static void testInfoCapabilities()
     replies.clear();
     for (uint16_t command = 0x0103; command <= 0x0105; ++command) {
         request.sequence++; request.command = command;
+        request.length = command==0x0103 ? 12 : (command==0x0104 ? 8 : 4);
+        memset(request.payload,0,request.length);
+        if(command!=0x0105)write32(request.payload+4,1);
+        if(command==0x0103)write32(request.payload+8,1);
         handleFrame(nullptr, request);
         drain();
         assert(replies.size() == 1 && read16(replies[0].payload) == 10);
@@ -120,10 +124,74 @@ static void testInfoCapabilities()
     }
     std::puts("PASS: GET_INFO wire layout, UID serialization and truthful capabilities");
 }
+static void testRequestContract()
+{
+    const auto support=stepper::p9::supportedCommands();
+    unsigned supportCount=0;
+    for(unsigned i=0;i<20;++i)if(support.commandBits&(uint32_t(1)<<i))++supportCount;
+    assert(supportCount==9 && stepper::contract::capabilities(support)==0x180);
+    UartProtocolInit();
+    handleFrame(nullptr, hello(1));
+    completeAndDrain();
+    tick = 100;
+    uint16_t sequence = 2;
+    auto reject = [&](uint16_t command, const std::vector<uint8_t> &bytes, uint16_t expected) {
+        stepper::Frame r = {};
+        r.type = 1; r.session = 0x12345678; r.sequence = sequence++; r.command = command;
+        r.length = uint16_t(bytes.size());
+        for (size_t i=0;i<bytes.size();++i) r.payload[i]=bytes[i];
+        const auto before = controlService.snapshot();
+        replies.clear(); handleFrame(nullptr,r); drain();
+        if (replies.size()!=1 || read16(replies[0].payload)!=expected)
+            std::fprintf(stderr,"contract cmd=%04x length=%u expected=%u actual=%u\n",command,r.length,expected,replies.empty()?99:read16(replies[0].payload));
+        assert(replies.size()==1 && read16(replies[0].payload)==expected && replies[0].length==2);
+        const auto after = controlService.snapshot();
+        assert(before.session==after.session && before.sampleCounter==after.sampleCounter && before.timestampMs==after.timestampMs);
+        assert(before.mode==after.mode && before.state==after.state && before.faultBits==after.faultBits);
+        assert(before.targetPosition==after.targetPosition && before.targetVelocity==after.targetVelocity && before.targetCurrentMa==after.targetCurrentMa);
+        for (unsigned i=0;i<3;++i) assert(!pending[i].valid);
+        stepper::ControlCommand queued = {};
+        assert(!mailbox.takeCommand(queued));
+        // Cached rejection, then conflicting content with identical sequence.
+        replies.clear(); handleFrame(nullptr,r); drain();
+        assert(replies.size()==1 && read16(replies[0].payload)==expected);
+        r.length++; r.payload[r.length-1]=0;
+        replies.clear(); handleFrame(nullptr,r); drain();
+        assert(replies.size()==1 && read16(replies[0].payload)==12);
+        // Invalid session wins over malformed payload and sequence conflict.
+        r.session=0x87654321;
+        replies.clear(); handleFrame(nullptr,r); drain();
+        assert(replies.size()==1 && read16(replies[0].payload)==11);
+    };
+    struct Fixture {uint16_t command;std::vector<uint8_t> bytes;};
+    const Fixture fixtures[]={
+        {5,{1,0,0,0}}, {0x0103,{0,0,0,0,1,0,0,0,1,0,0,0}},
+        {0x0104,{0,0,0,0,1,0,0,0}}, {0x0105,{0,0,0,0}}, {0x0107,{}},
+        {0x0201,{}}, {0x0202,{1,0,1,0,1,1,1,4,32,0,0,0}}, {0x0203,{1,0,0,0}},
+        {0x0301,{}}, {0x0302,{1,0,0,0}}, {0x0303,{1,0,0,0}}
+    };
+    for(const auto &fixture:fixtures) {
+        reject(fixture.command,fixture.bytes,10);
+        auto extra=fixture.bytes; extra.push_back(0);
+        reject(fixture.command,extra,3);
+    }
+    for(uint16_t command:{uint16_t(5),uint16_t(0x0302),uint16_t(0x0303)})reject(command,{0,0,0,0},4);
+    reject(0x0103,{0,0,0,0,0,0,0,0,1,0,0,0},4);
+    reject(0x0104,{0,0,0,128,1,0,0,0},4);
+    reject(0x0105,{0,0,0,128},4);
+    reject(0x0202,{1,0,1,0,1,1,1,4,0,1,0,0},4);
+    for(uint16_t command:{uint16_t(0x0402),uint16_t(0x0501),uint16_t(0x0502),uint16_t(0xaaaa)})reject(command,{},2);
+    // Reject traffic at 100ms must not renew the original 0ms heartbeat.
+    tick=500; UartProtocolControlTick(tick);
+    assert(controlService.snapshot().session==0 && (controlService.snapshot().faultBits&4)!=0);
+    std::puts("PASS: 11 unsupported commands validate first; replay/session priority and no control side effects");
+}
 int main(int argc, char **argv)
 {
     if (argc > 1) {
-        if (strcmp(argv[1], "info-capabilities") == 0)
+        if (strcmp(argv[1], "request-contract") == 0)
+            testRequestContract();
+        else if (strcmp(argv[1], "info-capabilities") == 0)
             testInfoCapabilities();
         else
             testTakeover(argv[1]);

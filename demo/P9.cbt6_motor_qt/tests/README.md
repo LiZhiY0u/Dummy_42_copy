@@ -61,3 +61,17 @@ The info test exercises the actual GET_INFO frame with HAL UID doubles and
 verifies that unimplemented target commands are not advertised as capabilities.
 The original suite and all four added cases pass. Encoder, TX and echo
 regressions also pass; these are hardware-boundary tests, not electrical tests.
+
+Command-contract alignment (2026-10-03): additionally run
+`tests/uart_handshake_test.exe request-contract` after compiling the executable.
+It covers all 11 unimplemented commands, validates payload before UNSUPPORTED,
+checks session/replay priority, and verifies no mailbox/target/heartbeat effects.
+The old implementation returned UNSUPPORTED for a five-byte TASK_QUERY and
+failed the BAD_PAYLOAD assertion before this integration.
+
+Uart/command_contract.h is a byte-identical distribution copy of the Qt
+workspace firmware/core/command_contract.h. Do not edit it independently.
+From the Qt workspace run `./scripts/check-firmware-core.ps1 -P9Project <P9-root>`
+before cross-repository delivery. command_support.h declares only real wired
+backends; adding a declaration alone does not implement a command or justify
+capability bits. The current support remains 9 commands and capabilities 0x180.
