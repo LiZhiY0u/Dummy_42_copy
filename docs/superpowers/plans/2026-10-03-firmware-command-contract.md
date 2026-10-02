@@ -1,6 +1,6 @@
 # 下位机命令契约同步 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans（本任务建议当前会话顺序执行）or superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans（本任务建议当前会话顺序执行）or superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 统一Qt、通用固件核心及实际P9的20个请求载荷校验，使未实现后端在校验后明确拒绝，保留现有控制执行边界。
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Windows PowerShell、Qt 5.14.2、MinGW 7.3.0、ARMClang 6.7、现有P9项目；不安装新环境。
 
-**Spec:** [命令契约设计](../specs/2026-10-03-firmware-command-contract-design.md)。当前为实施计划待评审，未修改产品代码。
+**Spec:** [命令契约设计](../specs/2026-10-03-firmware-command-contract-design.md)。用户已批准直接实施；产品接入与软件/ARM验证通过，独立审查结果见[验证记录](../../validation/2026-10-03-command-contract.md)。
 
 ## Global Constraints
 
@@ -53,8 +53,8 @@
 
 产生接口：`const Description *describe(uint16_t command)`、`uint16_t validatePayload(uint16_t command,const uint8_t *payload,size_t length)`、`bool supports(Support support,uint16_t command)`、`uint32_t capabilities(Support support)`；全部inline函数，const描述只读，不新增翻译单元。
 
-- [ ] 在`tst_dispatcher.cpp`添加`contractIndependentVectors()`：20条独立合法载荷（直接从协议基线编写字节，不用被测编码函数生成）全部返回0；每条加尾随字节返回3，WriteParams计数不变时也拒绝尾随数据。枚举20项及事件/遥测号缺席独立断言。
-- [ ] 添加`contractBoundaryFailures()`，至少包含以下字面断言，并涵盖参数15项、重复ID、未知ID、错误type/length和上下限。
+- [x] 在`tst_dispatcher.cpp`添加`contractIndependentVectors()`：20条独立合法载荷（直接从协议基线编写字节，不用被测编码函数生成）全部返回0；每条加尾随字节返回3，WriteParams计数不变时也拒绝尾随数据。枚举20项及事件/遥测号缺席独立断言。
+- [x] 添加`contractBoundaryFailures()`，至少包含以下字面断言，并涵盖参数15项、重复ID、未知ID、错误type/length和上下限。
 
 ```cpp
 QCOMPARE(validatePayload(2,nullptr,0),uint16_t(0));
@@ -68,39 +68,39 @@ const uint8_t minimum[4]={0,0,0,0x80};
 QCOMPARE(validatePayload(0x0105,minimum,4),uint16_t(4));
 ```
 
-- [ ] 添加`contractCapabilitiesRequireBackendSupport()`：空支持返回0；P9九项返回字面0x180；只有READ_PARAMS或WRITE_PARAMS不能置bit3；位置/速度/电流需ENABLE与对应目标命令；保存需SAVE_PARAMS与TASK_QUERY；校准需START/QUERY/CANCEL/TASK_QUERY；逻辑零点、清故障、遥测分别需对应命令。未知支持位不产生能力。
-- [ ] 运行`./scripts/build-host.ps1 -Test -BuildName host-p4`确认新增头文件/符号缺失导致RED，保存具体失败到日期化验证记录，不把环境失败视为RED。
-- [ ] 用apply_patch实现权威头文件，迁入当前校验规则，读取字段前做长度/指针检查，参数重复检测有界。
-- [ ] 同命令运行全部Qt测试确认GREEN；提交H端契约及测试里程碑，不声称P9已接入。
+- [x] 添加`contractCapabilitiesRequireBackendSupport()`：空支持返回0；P9九项返回字面0x180；只有READ_PARAMS或WRITE_PARAMS不能置bit3；位置/速度/电流需ENABLE与对应目标命令；保存需SAVE_PARAMS与TASK_QUERY；校准需START/QUERY/CANCEL/TASK_QUERY；逻辑零点、清故障、遥测分别需对应命令。未知支持位不产生能力。
+- [x] 运行`./scripts/build-host.ps1 -Test -BuildName host-p4`确认新增头文件/符号缺失导致RED，保存具体失败到日期化验证记录，不把环境失败视为RED。
+- [x] 用apply_patch实现权威头文件，迁入当前校验规则，读取字段前做长度/指针检查，参数重复检测有界。
+- [x] 同命令运行全部Qt测试确认GREEN；提交H端契约及测试里程碑，不声称P9已接入。
 
 ### Task 2: Qt与通用核心接入
 
 **Interfaces:** 消费任务1的describe/validatePayload；保留`ProtocolMessages::validateRequest(const Frame&)`、`validateParameters(const QByteArray&)`和`CommandDispatcher::handle(...)`公开接口。
 
-- [ ] 扩展`allRequestLengthsMatchQtValidation()`涵盖20命令×129长度，包括HELLO的SESSION0单独路径；增加合法向量以保证有成功样本。新增错误TYPE、SEQ0、SESSION0/错误HELLO SESSION及非法参数的独立期望测试。
-- [ ] 运行Qt回归，确认原校验与独立期望一致；复用RED阶段任务1作为提取校验的行为防护，不伪造必须失败的等价重构测试。
-- [ ] 在ProtocolMessages.cpp以相对路径`../../../firmware/core/command_contract.h`包含权威头文件；帧/会话检查先于调用。validateParameters直接调用WRITE_PARAMS规则，不修改参数响应编解码。
-- [ ] command_dispatcher.cpp包含同目录头文件，删除匿名validate/parameters重复函数并调用统一校验，保留所有会话、缓存、水位及Backend行为。
-- [ ] 运行Qt全部回归和`./scripts/check-firmware-core.ps1`，确认公开对象布局门槛不变；提交H端接入里程碑。
+- [x] 扩展`allRequestLengthsMatchQtValidation()`涵盖20命令×129长度，包括HELLO的SESSION0单独路径；增加合法向量以保证有成功样本。新增错误TYPE、SEQ0、SESSION0/错误HELLO SESSION及非法参数的独立期望测试。
+- [x] 运行Qt回归，确认原校验与独立期望一致；复用RED阶段任务1作为提取校验的行为防护，不伪造必须失败的等价重构测试。
+- [x] 在ProtocolMessages.cpp以相对路径`../../../firmware/core/command_contract.h`包含权威头文件；帧/会话检查先于调用。validateParameters直接调用WRITE_PARAMS规则，不修改参数响应编解码。
+- [x] command_dispatcher.cpp包含同目录头文件，删除匿名validate/parameters重复函数并调用统一校验，保留所有会话、缓存、水位及Backend行为。
+- [x] 运行Qt全部回归和`./scripts/check-firmware-core.ps1`，确认公开对象布局门槛不变；提交H端接入里程碑。
 
 ### Task 3: 实际P9接入与拒绝优先级
 
 **Interfaces:** 消费任务1接口。新增`stepper::p9::supportedCommands()`返回九项组成的contract::Support；不是运行时注册器。原控制服务、ControlKind和mailbox接口不改变。
 
-- [ ] 实际`uart_handshake_test.cpp`新增命令行场景`request-contract`。在成功HELLO后对11条未实现请求逐项发送独立合法载荷，断言10；逐项错误长度断言3，适用数值越界断言4。发送事件/遥测号和0xAAAA断言2；错误会话优先11、同SEQ变载荷优先12。
-- [ ] 每个拒绝请求前后比较snapshot、控制目标及邮箱占用，没有新pending、使能或心跳续期；重复拒绝得到相同响应。另覆盖支持清单恰好9项、GET_INFO能力字面0x180。
-- [ ] 按P9/tests/README.md的g++握手构建命令运行`tests/uart_handshake_test.exe request-contract`，观察旧实现对非法未实现请求返回10的RED。
-- [ ] 用apply_patch添加契约副本和command_support.h。在handleFrame原会话/事务检查之后统一校验；错误沿用sendAndRemember；合法但目标未支持返回10。删除knownButUnsupported/重复载荷校验，保留HELLO限制、各执行分支及finishControls；GET_INFO调用真实支持映射。
-- [ ] 重新编译运行基线、request-contract、cached-takeover、pending-takeover、running-takeover、info-capabilities；回归Qt控制服务的STOP优先/心跳/完成后应答及P9编码器/TX/echo。
-- [ ] 提交P端两个头文件、UART接入、测试和README，排除Keil输出；此时仍未完成ARM/硬件验收。
+- [x] 实际`uart_handshake_test.cpp`新增命令行场景`request-contract`。在成功HELLO后对11条未实现请求逐项发送独立合法载荷，断言10；逐项错误长度断言3，适用数值越界断言4。发送事件/遥测号和0xAAAA断言2；错误会话优先11、同SEQ变载荷优先12。
+- [x] 每个拒绝请求前后比较snapshot、控制目标及邮箱占用，没有新pending、使能或心跳续期；重复拒绝得到相同响应。另覆盖支持清单恰好9项、GET_INFO能力字面0x180。
+- [x] 按P9/tests/README.md的g++握手构建命令运行`tests/uart_handshake_test.exe request-contract`，观察旧实现对非法未实现请求返回10的RED。
+- [x] 用apply_patch添加契约副本和command_support.h。在handleFrame原会话/事务检查之后统一校验；错误沿用sendAndRemember；合法但目标未支持返回10。删除knownButUnsupported/重复载荷校验，保留HELLO限制、各执行分支及finishControls；GET_INFO调用真实支持映射。
+- [x] 重新编译运行基线、request-contract、cached-takeover、pending-takeover、running-takeover、info-capabilities；回归Qt控制服务的STOP优先/心跳/完成后应答及P9编码器/TX/echo。
+- [x] 提交P端两个头文件、UART接入、测试和README，排除Keil输出；此时仍未完成ARM/硬件验收。
 
 ### Task 4: 副本门槛、ARM构建与文档交付
 
 **Interfaces:** `check-firmware-core.ps1`新增可选参数`[string]$P9Project`；提供时校验`$P9Project/Uart/command_contract.h`与权威文件的字节一致性，再执行原有对象验证；缺失路径/副本或不一致均throw，不得跳过。不提供时保留原独立核心检查行为。
 
-- [ ] 用临时测试目录和apply_patch创建故意不同的副本，运行脚本带P9Project验证RED；换成真实P9路径后必须GREEN。临时测试文件仅在build下，不删除用户文件。
-- [ ] 在脚本添加文件一致性检查，不修改编译器选项、构建工程或链接配置。
-- [ ] 在P目录使用既有ARM工具重编译uart_protocol.cpp。所有执行命令必须检查LASTEXITCODE；包括Core/Inc、HAL/Legacy、CMSIS及各业务头文件目录。
+- [x] 用临时测试目录和apply_patch创建故意不同的副本，运行脚本带P9Project验证RED；换成真实P9路径后必须GREEN。临时测试文件仅在build下，不删除用户文件。
+- [x] 在脚本添加文件一致性检查，不修改编译器选项、构建工程或链接配置。
+- [x] 在P目录使用既有ARM工具重编译uart_protocol.cpp。所有执行命令必须检查LASTEXITCODE；包括Core/Inc、HAL/Legacy、CMSIS及各业务头文件目录。
 
 ```powershell
 $compiler = 'E:/keil5_2_4/ARM/ARMCLANG/bin/armclang.exe'
@@ -111,13 +111,13 @@ try { & 'E:/keil5_2_4/ARM/ARMCLANG/bin/armlink.exe' --via cbt6_demo3/cbt6_demo3.
 ./tests/check-stack.ps1 -Mode normal
 ```
 
-- [ ] 链接成功后用既有fromelf导出候选HEX并记录SHA256、Code/RO/RW/ZI、告警及新调用链栈估算；超过1024B即失败，不通过增大栈绕过。明确增量链接、未硬件测量，不将旧840B当新结果。
-- [ ] 运行完整Qt/P9回归、契约副本检查、静态ISR禁用API检查及55个既有文档链接的更新检查，记录实际新计数。
-- [ ] 更新进度台账I16、功能说明、协议手册及新增`docs/validation/2026-10-03-command-contract.md`。记录新错误优先级但保持9/11支持数量及硬件未验收状态，补充以后接入后端的清单规则。
-- [ ] 检查两端暂存diff、生成物排除、回归结果和Git状态；提交脚本/文档里程碑，列出两个最终提交ID。最终报告必须明确没有烧录、运动、推送或合并。
+- [x] 链接成功后用既有fromelf导出候选HEX并记录SHA256、Code/RO/RW/ZI、告警及新调用链栈估算；超过1024B即失败，不通过增大栈绕过。明确增量链接、未硬件测量，不将旧840B当新结果。
+- [x] 运行完整Qt/P9回归、契约副本检查、静态ISR禁用API检查及55个既有文档链接的更新检查，记录实际新计数。
+- [x] 更新进度台账I16、功能说明、协议手册及新增`docs/validation/2026-10-03-command-contract.md`。记录新错误优先级但保持9/11支持数量及硬件未验收状态，补充以后接入后端的清单规则。
+- [x] 检查两端暂存diff、生成物排除、回归结果和Git状态；提交脚本/文档里程碑，列出两个最终提交ID。最终报告必须明确没有烧录、运动、推送或合并。
 
 ## 自审与交接
 
 上述四任务对应设计第3～8节：独立契约、三个接入点、异步执行保护、副本及栈门槛均有归属。设计的未来运动/存储/校准不列入任务，禁止为了“框架完整”添加成功占位后端。
 
-建议Native顺序执行：任务间共享契约接口，四个阶段需要连续验证实际P9路径。计划需用户评审并确认执行方式后开始产品实现；无需新建用户聊天。
+用户已确认Native顺序执行；四项任务依次实现，独立只读审查随后追加结果。正常模式硬件验收不包含在本轮软件完成条件内。

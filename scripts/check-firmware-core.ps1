@@ -1,6 +1,20 @@
-param()
+param([string]$P9Project)
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
+if ($PSBoundParameters.ContainsKey('P9Project')) {
+    if ([string]::IsNullOrWhiteSpace($P9Project) -or !(Test-Path -LiteralPath $P9Project -PathType Container)) {
+        throw 'P9 project directory missing'
+    }
+    $copyPath = Join-Path $P9Project 'Uart/command_contract.h'
+    if (!(Test-Path -LiteralPath $copyPath -PathType Leaf)) { throw 'P9 contract copy missing' }
+    $canonical = [IO.File]::ReadAllBytes((Join-Path $projectRoot 'firmware/core/command_contract.h'))
+    $copy = [IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $copyPath).Path)
+    if ($canonical.Length -ne $copy.Length) { throw 'Command contract copies differ' }
+    for ($index=0; $index -lt $canonical.Length; $index++) {
+        if ($canonical[$index] -ne $copy[$index]) { throw "Command contract copies differ at byte $index" }
+    }
+    Write-Output 'PASS: canonical/P9 command contract byte identity'
+}
 $armCompiler = 'E:\keil5_2_4\ARM\ARMCLANG\bin\armclang.exe'
 if (!(Test-Path -LiteralPath $armCompiler)) { throw 'Existing ARM Compiler 6.7 not found; no tools will be installed.' }
 $outputPath = Join-Path $projectRoot 'build\p4-arm'
