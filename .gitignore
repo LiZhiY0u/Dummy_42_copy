@@ -1,0 +1,6 @@
+/build/
+/dist/
+*.pro.user
+*.pro.user.*
+/.superpowers/
+/host-handshake-regression.log
