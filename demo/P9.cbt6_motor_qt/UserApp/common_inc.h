@@ -35,6 +35,7 @@ extern "C"
 #include "encoder_calibrator_base.h"
 #include "button_base.h"
 #include "uart_handle.h"
+#include "uart_protocol.h"
 
 // C++测试
 class Test

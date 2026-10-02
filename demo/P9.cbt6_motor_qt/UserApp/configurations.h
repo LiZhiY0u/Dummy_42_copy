@@ -1,6 +1,22 @@
 #ifndef CONFIGURATIONS_H
 #define CONFIGURATIONS_H
 
+// Current diagnostic: echo received bytes exactly, without protocol framing.
+#ifndef UART_ECHO_TEST_MODE
+#define UART_ECHO_TEST_MODE 0
+#endif
+
+// Temporary UART wiring diagnostic. Set to 0 and rebuild to restore protocol V1.
+#ifndef UART_TX_TEST_MODE
+#define UART_TX_TEST_MODE 0
+#endif
+
+// Temporary protocol diagnostic: no encoder/PWM/control timers, no motion.
+// Set to 0 after serial handshake has been verified.
+#ifndef UART_COMM_ONLY_TEST
+#define UART_COMM_ONLY_TEST 0
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif

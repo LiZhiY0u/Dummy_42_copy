@@ -1,0 +1,5 @@
+# Local Keil output and per-user IDE state; tracked historical output is retained.
+/MDK-ARM/cbt6_demo3/
+/MDK-ARM/*.uvguix.*
+/MDK-ARM/*.uvoptx
+/MDK-ARM/*.lst

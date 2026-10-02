@@ -985,6 +985,26 @@
               <FileType>8</FileType>
               <FilePath>..\Uart\uart_handle.cpp</FilePath>
             </File>
+            <File>
+              <FileName>protocol_v1.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\Uart\protocol_v1.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>uart_protocol.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\Uart\uart_protocol.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>control_gate.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\Motor\control_gate.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>control_service.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\Motor\control_service.cpp</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

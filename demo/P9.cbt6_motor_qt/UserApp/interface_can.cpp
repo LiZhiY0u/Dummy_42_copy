@@ -103,6 +103,8 @@ void OnCanCmd(uint8_t _cmd, uint8_t *_data, uint32_t _len)
 {
     if (_data == nullptr || !HasCommandLength(_cmd, _len))
         return;
+    if (_cmd >= 0x01 && _cmd <= 0x07 && !UartProtocolCanAcceptCanMotion())
+        return;
 
     float tmpF;
     int32_t tmpI;

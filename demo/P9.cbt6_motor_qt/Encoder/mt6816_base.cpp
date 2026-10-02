@@ -66,6 +66,9 @@ extern "C" bool MT6816Base::SpiTransmitAndRead16Bits(uint16_t _dataTx, uint16_t 
 
 extern "C" void MT6816Base::Init()
 {
+    // HAL_SPI_Init configures SPI but does not set SPE. Register-level polling
+    // does not go through HAL_SPI_TransmitReceive, so enable it explicitly.
+    __HAL_SPI_ENABLE(&hspi1);
     // SpiInit();
     // UpdateAngle();
 

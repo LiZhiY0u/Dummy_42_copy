@@ -130,6 +130,13 @@ extern "C"
             float GetVelocity();
             int32_t Get_est_velocity();
             float GetFocCurrent();
+            int32_t GetPositionSteps() const;
+            int32_t GetTargetPositionSteps() const;
+            int32_t GetTargetVelocitySteps() const;
+            int32_t GetTargetCurrentMa() const;
+            int32_t GetCurrentCommandMa() const;
+            void StopAndReset();
+            bool EnableProtocolMode(uint8_t mode, int32_t initialPosition);
             void AddTrajectorySetPoint(int32_t _pos, int32_t _vel); // 好像没用到
             // void SetDisable(bool _disable);// 没用
             // void SetBrake(bool _brake); // 没用

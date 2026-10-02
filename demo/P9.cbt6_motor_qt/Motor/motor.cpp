@@ -520,6 +520,71 @@ float Motor::Controller::GetFocCurrent()
     return (float)focCurrent / 1000.f;
 }
 
+int32_t Motor::Controller::GetPositionSteps() const
+{
+    return realPosition - context->config.motionParams.encoderHomeOffset;
+}
+
+int32_t Motor::Controller::GetTargetPositionSteps() const
+{
+    return goalPosition - context->config.motionParams.encoderHomeOffset;
+}
+
+int32_t Motor::Controller::GetTargetVelocitySteps() const
+{
+    return goalVelocity;
+}
+
+int32_t Motor::Controller::GetTargetCurrentMa() const
+{
+    return goalCurrent;
+}
+
+int32_t Motor::Controller::GetCurrentCommandMa() const
+{
+    return focCurrent;
+}
+
+void Motor::Controller::StopAndReset()
+{
+    requestMode = MODE_STOP;
+    modeRunning = MODE_STOP;
+    goalPosition = realPosition;
+    goalVelocity = 0;
+    goalCurrent = 0;
+    softPosition = realPosition;
+    softVelocity = 0;
+    softCurrent = 0;
+    softNewCurve = true;
+    focPosition = 0;
+    focCurrent = 0;
+    ClearIntegral();
+    tb67h450_base.Sleep();
+}
+
+bool Motor::Controller::EnableProtocolMode(uint8_t mode, int32_t initialPosition)
+{
+    switch (mode)
+    {
+    case 0:
+        SetPositionSetPoint(initialPosition);
+        requestMode = MODE_COMMAND_POSITION;
+        break;
+    case 1:
+        SetVelocitySetPoint(0);
+        requestMode = MODE_COMMAND_VELOCITY;
+        break;
+    case 2:
+        SetCurrentSetPoint(0);
+        requestMode = MODE_COMMAND_CURRENT;
+        break;
+    default:
+        return false;
+    }
+    softNewCurve = true;
+    return true;
+}
+
 // 把参数限制正负1000内，赋给goalCurrent
 void Motor::Controller::SetCurrentSetPoint(int32_t _cur)
 {

@@ -1,5 +1,7 @@
 #include "common_inc.h"
 #include "configurations.h"
+#include "uart_tx_test.h"
+#include "uart_echo_test.h"
 
 /*
 sqrtf测试，计算平方根
@@ -14,8 +16,6 @@ extern CAN_TxHeaderTypeDef TxHeader;
 extern CAN_RxHeaderTypeDef RxHeader;
 
 uint16_t _b = 0, _g = 0, _p = 0;
-uint8_t rx_buffer[128] = {0}, rxLen = 0;
-
 BoardConfig_t boardConfig;
 Motor motor;
 MT6816Base mt6816_base((uint16_t *)(0x08017C00));
@@ -23,15 +23,25 @@ TB67H450Base tb67h450_base;
 EncoderCalibratorBase encoder_calibrator_base;
 ButtonBase button1(GPIOB, GPIO_PIN_2, 1, 1000), button2(GPIOB, GPIO_PIN_12, 2, 1000);
 
-extern DMA_HandleTypeDef hdma_usart1_rx;
 extern uint8_t _a;
 extern uint16_t _v;
 
 uint16_t aaa = 0;
-uint8_t rec_buff[100] = {0};
+uint8_t rec_buff[160] = {0};
 
 extern "C" void Main()
 {
+#if UART_ECHO_TEST_MODE
+    tb67h450_base.Sleep();
+    for (;;)
+        UartEchoTestStep();
+#endif
+#if UART_TX_TEST_MODE
+    // Do not initialize the encoder, start control timers/PWM or accept motion.
+    tb67h450_base.Sleep();
+    for (;;)
+        UartTxTestStep();
+#endif
     boardConfig = BoardConfig_t{
         .configStatus = CONFIG_OK,
         .canNodeId = 1,
@@ -70,12 +80,31 @@ extern "C" void Main()
     motor.motionPlanner.velocityTracker.SetVelocityAcc(boardConfig.velocityAcc);
     motor.motionPlanner.positionTracker.SetVelocityAcc(boardConfig.velocityAcc);
 
+#if UART_COMM_ONLY_TEST
+    // Isolate the UART protocol from the high-rate control ISR. Invalid sensor
+    // measurements deliberately keep the control gate closed to ENABLE.
+    tb67h450_base.Sleep();
+    mt6816_base.angleData.sampleValid = false;
+    mt6816_base.angleData.rectifyValid = false;
+    UartProtocolInit();
+    if (HAL_UARTEx_ReceiveToIdle_DMA(&huart1, rec_buff, sizeof(rec_buff)) != HAL_OK)
+        Error_Handler();
+    __HAL_DMA_DISABLE_IT(huart1.hdmarx, DMA_IT_HT);
+    for (;;)
+    {
+        UartProtocolControlTick(HAL_GetTick());
+        UartProtocolPoll(HAL_GetTick());
+        HAL_Delay(1);
+    }
+#endif
     mt6816_base.Init();
     motor.controller->Init();
 
     HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3);
     HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4);
     tb67h450_base.Sleep();
+
+    UartProtocolInit();
 
     if (HAL_UARTEx_ReceiveToIdle_DMA(&huart1, rec_buff, sizeof(rec_buff)) == HAL_OK)
         __HAL_DMA_DISABLE_IT(huart1.hdmarx, DMA_IT_HT);
@@ -85,7 +114,7 @@ extern "C" void Main()
 
     for (;;)
     {
-
+        UartProtocolPoll(HAL_GetTick());
         encoder_calibrator_base.TickMainLoop();
 
         // static uint32_t _a = 0;
@@ -125,9 +154,9 @@ extern "C" void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
         }
         else
         {
-
             motor.Tick20kHz();
         }
+        UartProtocolControlTick(HAL_GetTick());
 
         // tim4callback();
     }
@@ -160,14 +189,6 @@ void test2()
     }
 }
 
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
-{
-    uint32_t temp = __HAL_DMA_GET_COUNTER(&hdma_usart1_rx);
-    rxLen = 128 - temp;
-
-    HAL_UART_Receive_DMA(&huart1, rx_buffer, 128);
-}
-
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *CanHandle)
 {
     /* Get RX message */
@@ -177,6 +198,9 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *CanHandle)
         Error_Handler();
     }
 
+#if UART_TX_TEST_MODE || UART_COMM_ONLY_TEST || UART_ECHO_TEST_MODE
+    return; // Drain CAN RX but never execute commands in the wiring diagnostic.
+#endif
     uint8_t id = (RxHeader.StdId >> 7);  // 4Bits ID & 7Bits Msg
     uint8_t cmd = RxHeader.StdId & 0x7F; // 4Bits ID & 7Bits Msg
     if (id == 0 || id == boardConfig.canNodeId)

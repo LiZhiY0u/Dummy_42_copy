@@ -8,7 +8,7 @@ extern "C"
 
 #include "common_inc.h"
 
-extern uint8_t rec_buff[100];
+extern uint8_t rec_buff[160];
 
 void Upload_estvelocity();
 
