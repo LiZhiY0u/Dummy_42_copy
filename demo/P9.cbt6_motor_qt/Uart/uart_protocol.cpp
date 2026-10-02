@@ -353,6 +353,15 @@ bool queueControl(const stepper::Frame &request, stepper::ControlKind kind,
     return true;
 }
 
+// Keep the snapshot return temporary off the subsequent dispatch call chain.
+// Parser callbacks run only in the non-reentrant main loop.
+__attribute__((noinline)) const stepper::ControlSnapshot &requestSnapshot()
+{
+    static stepper::ControlSnapshot snapshot;
+    snapshot = controlService.snapshot();
+    return snapshot;
+}
+
 void handleFrame(void *, const stepper::Frame &request)
 {
     ++uartDiagValidFrames;
@@ -360,8 +369,7 @@ void handleFrame(void *, const stepper::Frame &request)
     if (request.type != 1 || !request.sequence || request.length > 128)
         return;
 
-    static stepper::ControlSnapshot snapshot; // Main-loop parser is non-reentrant.
-    snapshot = controlService.snapshot();
+    const stepper::ControlSnapshot &snapshot = requestSnapshot();
     const uint32_t activeSession = snapshot.session;
     if (activeSession != cachedSession)
     {

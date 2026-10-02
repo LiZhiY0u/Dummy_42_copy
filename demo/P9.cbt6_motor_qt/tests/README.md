@@ -75,3 +75,14 @@ From the Qt workspace run `./scripts/check-firmware-core.ps1 -P9Project <P9-root
 before cross-repository delivery. command_support.h declares only real wired
 backends; adding a declaration alone does not implement a command or justify
 capability bits. The current support remains 9 commands and capabilities 0x180.
+
+Final stack-gate correction: run `./tests/test-stack-gate.ps1`, then
+`./tests/check-stack.ps1 -Mode normal` against the actual linked report.
+Compile the UART unit with `-g` to emit local stack-frame metadata; unknown
+UART/inline-contract frames are now rejected. The earlier 840B estimate is
+invalid. Metadata first revealed 1032B; isolating the snapshot return temporary
+in a non-inlined main-loop helper reduced the estimate to 1008/1024B
+(main312 + receiver200 + IRQ368 + allowance128). Only 16B remains. Existing
+library exception/pointer tails still rely on the allowance assumptions; this
+is not an absolute bound or hardware acceptance. Full rebuild, on-target stack
+high-water and ISR timing verification remain required. No firmware was flashed.

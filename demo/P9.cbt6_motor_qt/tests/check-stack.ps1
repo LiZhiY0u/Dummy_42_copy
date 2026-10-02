@@ -6,6 +6,14 @@ $startup=Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\MDK-ARM\startup_s
 $budgetMatch=[regex]::Match($startup,'Stack_Size\s+EQU\s+0x([0-9A-Fa-f]+)')
 if(!$budgetMatch.Success){throw 'Missing stack allocation'}
 $budget=[Convert]::ToInt32($budgetMatch.Groups[1].Value,16)
+# Rebuilt UART translation-unit functions include the inline command contract.
+# Never silently accept missing local-frame metadata in this safety boundary.
+$blocks=[regex]::Matches($html,'(?s)<P><STRONG><a name="\[[^\]]+\]"></a>[^<]*</STRONG>.*?(?=<P><STRONG>|\z)')
+foreach($entry in $blocks) {
+    if($entry.Value -match 'uart_protocol\.o\(' -and $entry.Value -notmatch 'Stack size \d+ bytes') {
+        throw 'Unknown UART stack frame: rebuild uart_protocol.cpp with -g and relink before acceptance'
+    }
+}
 function Depth([string]$Name) {
     $pattern='(?s)<P><STRONG><a name="\[[^\]]+\]"></a>'+[regex]::Escape($Name)+'[^<]*</STRONG>.*?(?=<P><STRONG>|\z)'
     $block=[regex]::Match($html,$pattern)
