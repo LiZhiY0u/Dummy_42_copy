@@ -1,5 +1,6 @@
 param([ValidateSet('diagnostic','normal')][string]$Mode='diagnostic',
-      [string]$Report=(Join-Path $PSScriptRoot '..\MDK-ARM\cbt6_demo3\cbt6_demo3.htm'))
+      [string]$Report=(Join-Path $PSScriptRoot '..\MDK-ARM\cbt6_demo3\cbt6_demo3.htm'),
+      [ValidateRange(0,1024)][int]$MinimumHeadroom=0)
 $ErrorActionPreference='Stop'
 $html=Get-Content -LiteralPath $Report -Raw
 $startup=Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\MDK-ARM\startup_stm32f103xb.s') -Raw
@@ -39,4 +40,5 @@ $systick=Depth 'SysTick_Handler'
 $estimate=$main+$receiver+$irq+$systick+64+64
 "STACK mode=$Mode budget=$budget main=$main receiver=$receiver irq=$irq systick=$systick allowance=128 estimate=$estimate"
 if($estimate -gt $budget){throw 'Stack budget exceeded: do not flash this profile'}
+if(($budget-$estimate) -lt $MinimumHeadroom){throw "Stack headroom below requested $MinimumHeadroom bytes"}
 'PASS: conservative static gate; not a substitute for on-target stack high-water measurement'

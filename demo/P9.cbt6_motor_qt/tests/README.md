@@ -86,3 +86,10 @@ in a non-inlined main-loop helper reduced the estimate to 1008/1024B
 library exception/pointer tails still rely on the allowance assumptions; this
 is not an absolute bound or hardware acceptance. Full rebuild, on-target stack
 high-water and ISR timing verification remain required. No firmware was flashed.
+
+Subsequent main-loop snapshot/dispatch separation: full normal rebuild yields
+992/1024B estimate (312 main +184 receiver +368 IRQ +128 allowance), 32B
+headroom; ZI increases16B. Run check-stack.ps1 with `-MinimumHeadroom 32`
+to catch regressions to the old16B reserve; this is not a hardware safety limit.
+test-stack-gate.ps1 also checks exact reserve acceptance/one-byte deficit rejection.
+Only the non-reentrant main-loop parser callback owns requestState/requestTimeMs.

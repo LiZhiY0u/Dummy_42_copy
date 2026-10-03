@@ -355,21 +355,18 @@ bool queueControl(const stepper::Frame &request, stepper::ControlKind kind,
 
 // Keep the snapshot return temporary off the subsequent dispatch call chain.
 // Parser callbacks run only in the non-reentrant main loop.
-__attribute__((noinline)) const stepper::ControlSnapshot &requestSnapshot()
+stepper::ControlSnapshot requestState; // Only the non-reentrant parser callback owns it.
+uint32_t requestTimeMs;
+__attribute__((noinline)) void captureRequestSnapshot()
 {
-    static stepper::ControlSnapshot snapshot;
-    snapshot = controlService.snapshot();
-    return snapshot;
+    requestState = controlService.snapshot();
 }
 
-void handleFrame(void *, const stepper::Frame &request)
+// Capture returns before dispatch allocates its frame; parser is non-reentrant.
+__attribute__((noinline)) void dispatchFrame(const stepper::Frame &request)
 {
-    ++uartDiagValidFrames;
-    const uint32_t nowMs = HAL_GetTick();
-    if (request.type != 1 || !request.sequence || request.length > 128)
-        return;
-
-    const stepper::ControlSnapshot &snapshot = requestSnapshot();
+    const uint32_t nowMs = requestTimeMs;
+    const stepper::ControlSnapshot &snapshot = requestState;
     const uint32_t activeSession = snapshot.session;
     if (activeSession != cachedSession)
     {
@@ -486,6 +483,16 @@ void handleFrame(void *, const stepper::Frame &request)
         break;
     }
     sendAndRemember(request, response, nowMs);
+}
+
+void handleFrame(void *, const stepper::Frame &request)
+{
+    ++uartDiagValidFrames;
+    requestTimeMs = HAL_GetTick();
+    if (request.type != 1 || !request.sequence || request.length > 128)
+        return;
+    captureRequestSnapshot();
+    dispatchFrame(request);
 }
 
 // Keep scheduler workspaces out of the parser caller's stack frame.
