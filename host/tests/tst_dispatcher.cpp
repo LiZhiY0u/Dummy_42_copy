@@ -69,6 +69,11 @@ private slots:
         QCOMPARE(validatePayload(2,nullptr,0),uint16_t(0));
         QCOMPARE(validatePayload(2,nullptr,1),uint16_t(3));
         QCOMPARE(validatePayload(2,nullptr,129),uint16_t(3));
+        // Removing the common non-null guard must break these nonempty rules.
+        QCOMPARE(validatePayload(1,nullptr,4),uint16_t(3));
+        QCOMPARE(validatePayload(0x0202,nullptr,4),uint16_t(3));
+        const uint8_t oversized[129]={0};
+        QCOMPARE(validatePayload(1,oversized,sizeof(oversized)),uint16_t(3));
         struct Vector {uint16_t cmd;const char *hex;uint16_t status;};
         const Vector vectors[]={
             {1,"00000000",3},{5,"00000000",4},{0x0302,"00000000",4},{0x0303,"00000000",4},
