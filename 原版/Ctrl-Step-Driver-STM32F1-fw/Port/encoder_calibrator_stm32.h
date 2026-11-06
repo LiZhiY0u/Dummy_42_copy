@@ -11,8 +11,10 @@ public:
 
 
 private:
+    bool writeOk = false;
+    uint32_t nextAddress = 0;
     void BeginWriteFlash() override;
-    void EndWriteFlash() override;
+    bool EndWriteFlash() override;
     void ClearFlash() override;
     void WriteFlash16bitsAppend(uint16_t _data) override;
 };

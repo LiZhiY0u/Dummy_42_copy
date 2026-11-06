@@ -23,6 +23,7 @@
 /* USER CODE BEGIN 0 */
 #include "common_inc.h"
 #include "configurations.h"
+#include <string.h>
 
 CAN_TxHeaderTypeDef TxHeader;
 CAN_RxHeaderTypeDef RxHeader;
@@ -52,7 +53,7 @@ void MX_CAN_Init(void)
   hcan.Init.TimeSeg1 = CAN_BS1_5TQ;
   hcan.Init.TimeSeg2 = CAN_BS2_3TQ;
   hcan.Init.TimeTriggeredMode = DISABLE;
-  hcan.Init.AutoBusOff = DISABLE;
+  hcan.Init.AutoBusOff = ENABLE;
   hcan.Init.AutoWakeUp = ENABLE;
   hcan.Init.AutoRetransmission = DISABLE;
   hcan.Init.ReceiveFifoLocked = DISABLE;
@@ -180,27 +181,41 @@ void HAL_CAN_MspDeInit(CAN_HandleTypeDef* canHandle)
 /* USER CODE BEGIN 1 */
 void CAN_Send(CAN_TxHeaderTypeDef* pHeader, uint8_t* data)
 {
-    if (HAL_CAN_AddTxMessage(&hcan, pHeader, data, &TxMailbox) != HAL_OK)
-    {
-        Error_Handler();
-    }
+    // Replies are best effort: a full mailbox must not halt the control loop.
+    if (HAL_CAN_GetTxMailboxesFreeLevel(&hcan) != 0U)
+        (void)HAL_CAN_AddTxMessage(&hcan, pHeader, data, &TxMailbox);
 }
 
-void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef* CanHandle)
-{
-    /* Get RX message */
-    if (HAL_CAN_GetRxMessage(CanHandle, CAN_RX_FIFO0, &RxHeader, RxData) != HAL_OK)
-    {
-        /* Reception Error */
-        Error_Handler();
-    }
+// Single-producer/single-consumer queue. Drop new frames on overload.
+static struct { uint16_t id; uint8_t len; uint8_t data[8]; } pending[8];
+static volatile uint8_t head = 0, tail = 0;
 
-    uint8_t id = (RxHeader.StdId >> 7); // 4Bits ID & 7Bits Msg
-    uint8_t cmd = RxHeader.StdId & 0x7F; // 4Bits ID & 7Bits Msg
-    if (id == 0 || id == 1)
-    {
-        OnCanCmd(cmd, RxData, RxHeader.DLC);
-    }
+void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef* handle)
+{
+    CAN_RxHeaderTypeDef header;
+    uint8_t data[8] = {0};
+    if (HAL_CAN_GetRxMessage(handle, CAN_RX_FIFO0, &header, data) != HAL_OK) return;
+    if (header.IDE != CAN_ID_STD || header.RTR != CAN_RTR_DATA || header.DLC > 8) return;
+    uint8_t next = (head + 1U) % 8U;
+    if (next == tail) return;
+    pending[head].id = header.StdId;
+    pending[head].len = header.DLC;
+    memcpy(pending[head].data, data, 8);
+    __DMB();
+    head = next;
+}
+
+void CAN_ProcessPending(void)
+{
+    if (head == tail) return;
+    uint16_t id = pending[tail].id;
+    uint8_t len = pending[tail].len;
+    uint8_t data[8];
+    memcpy(data, pending[tail].data, 8);
+    __DMB();
+    tail = (tail + 1U) % 8U;
+    if ((id >> 7) == 0 || (id >> 7) == boardConfig.canNodeId)
+        OnCanCmd(id & 0x7f, data, len);
 }
 /* USER CODE END 1 */
 

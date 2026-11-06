@@ -9,7 +9,9 @@ extern "C"
 {
 
 #endif
+#ifndef STM32F1xx
 #define STM32F1xx
+#endif
 
 /* Be able to change FLASH_BANK_NUMBER to use if relevant */
 #if !defined(FLASH_BANK_NUMBER) &&                                     \

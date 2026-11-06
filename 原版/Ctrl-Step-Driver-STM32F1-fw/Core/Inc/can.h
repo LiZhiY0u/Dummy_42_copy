@@ -45,6 +45,7 @@ extern CAN_HandleTypeDef hcan;
 void MX_CAN_Init(void);
 
 /* USER CODE BEGIN Prototypes */
+void CAN_ProcessPending(void);
 void CAN_Send(CAN_TxHeaderTypeDef* pHeader, uint8_t* data);
 
 /* USER CODE END Prototypes */

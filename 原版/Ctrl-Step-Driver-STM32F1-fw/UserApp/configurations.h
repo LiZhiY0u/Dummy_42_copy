@@ -6,7 +6,7 @@ extern "C" {
 #endif
 /*---------------------------- C Scope ---------------------------*/
 #include <stdbool.h>
-#include "stdint-gcc.h"
+#include <stdint.h>
 
 typedef enum configStatus_t
 {

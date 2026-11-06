@@ -6,6 +6,16 @@ void LedBase::Tick(uint32_t _timeElapseMillis, Motor::State_t _state)
 
     switch (_state)
     {
+        case Motor::STATE_STORAGE_FAULT:
+            motorEnable = false;
+            heartBeatEnable = false;
+            targetBlinkNum = 5;
+            break;
+        case Motor::STATE_ENCODER_FAULT:
+            motorEnable = false;
+            heartBeatEnable = false;
+            targetBlinkNum = 4;
+            break;
         case Motor::STATE_NO_CALIB:
             motorEnable = false;
             heartBeatEnable = false;

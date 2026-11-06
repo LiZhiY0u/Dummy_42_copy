@@ -377,8 +377,9 @@ void USART1_IRQHandler(void)
     if ((__HAL_UART_GET_FLAG(&huart1, UART_FLAG_IDLE) != RESET))
     {
         __HAL_UART_CLEAR_IDLEFLAG(&huart1);
-        HAL_UART_DMAStop(&huart1);
+        // Capture the remaining count before abort; stop RX only, never TX DMA.
         uint32_t temp = __HAL_DMA_GET_COUNTER(&hdma_usart1_rx);
+        HAL_UART_AbortReceive(&huart1);
         rxLen = BUFFER_SIZE - temp;
 
         OnRecvEnd(rx_buffer, rxLen);

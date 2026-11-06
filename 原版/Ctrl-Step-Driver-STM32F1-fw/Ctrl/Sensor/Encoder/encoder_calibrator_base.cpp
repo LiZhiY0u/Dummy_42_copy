@@ -134,9 +134,23 @@ void EncoderCalibratorBase::CalibrationDataCheck()
 }
 
 // 默认2000电流
+void EncoderCalibratorBase::Cancel()
+{
+    isTriggered = false;
+    state = CALI_DISABLE;
+    motor->Stop();
+}
+
 void EncoderCalibratorBase::Tick20kHz()
 {
     motor->encoder->UpdateAngle();
+    if (!motor->encoder->angleData.sampleValid || motor->HasFault())
+    {
+        motor->LatchEncoderFault();
+        state = CALI_DISABLE;
+        isTriggered = false;
+        return;
+    }
 
     switch (state)
     {
@@ -244,7 +258,7 @@ void EncoderCalibratorBase::TickMainLoop()
     if (state != CALI_CALCULATING) // 完成校准后进入
         return;
 
-    motor->driver->Sleep();
+    motor->BeginMaintenance();
 
     CalibrationDataCheck(); // 得到零点步数及零点数据
 
@@ -346,7 +360,10 @@ void EncoderCalibratorBase::TickMainLoop()
             }
         }
 
-        EndWriteFlash();
+        if (!EndWriteFlash()) {
+            errorCode = CALI_ERROR_FLASH;
+            motor->LatchStorageFault();
+        }
 
         if (resultNum != motor->encoder->RESOLUTION)
             errorCode = CALI_ERROR_ANALYSIS_QUANTITY;
@@ -359,13 +376,14 @@ void EncoderCalibratorBase::TickMainLoop()
     else
     {
         motor->encoder->angleData.rectifyValid = false;
-        ClearFlash();
+        // Header remains uncommitted on any failed write.
     }
 
     motor->controller->isStalled = true; // 开启堵转保护，实际上在校准成功后只进一次
 
     state = CALI_DISABLE; // 返回校准流程起点
     isTriggered = false;
+    motor->EndMaintenance();
 
     if (errorCode == CALI_NO_ERROR)
         HAL_NVIC_SystemReset(); // 复位芯片

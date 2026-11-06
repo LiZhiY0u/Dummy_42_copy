@@ -19,17 +19,14 @@ public:
         config.motionParams.ratedVelocityAcc = 1000 * MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS;
 
         config.ctrlParams.stallProtectSwitch = false;
-        config.ctrlParams.pid =
-            Controller::PID_t{
-                .kp = 5,
-                .ki = 30,
-                .kd = 0};
-        config.ctrlParams.dce =
-            Controller::DCE_t{
-                .kp = 200,
-                .kv = 80,
-                .ki = 300,
-                .kd = 250};
+        config.ctrlParams.pid = {};
+        config.ctrlParams.pid.kp = 5;
+        config.ctrlParams.pid.ki = 30;
+        config.ctrlParams.dce = {};
+        config.ctrlParams.dce.kp = 200;
+        config.ctrlParams.dce.kv = 80;
+        config.ctrlParams.dce.ki = 300;
+        config.ctrlParams.dce.kd = 250;
 
         /*****************************************************/
 
@@ -61,7 +58,9 @@ public:
         STATE_RUNNING,
         STATE_OVERLOAD,
         STATE_STALL,
-        STATE_NO_CALIB
+        STATE_NO_CALIB,
+        STATE_ENCODER_FAULT,
+        STATE_STORAGE_FAULT
     } State_t;
 
     class Controller
@@ -177,10 +176,21 @@ public:
     DriverBase *driver = nullptr;
 
     void Tick20kHz();
+    void Stop();
+    void BeginMaintenance();
+    void EndMaintenance();
+    bool IsMaintaining() const { return maintenance; }
+    void LatchEncoderFault();
+    bool HasEncoderFault() const { return encoderFault; }
+    bool HasFault() const { return encoderFault || storageFault; }
+    void LatchStorageFault();
     void AttachEncoder(EncoderBase *_encoder);
     void AttachDriver(DriverBase *_driver);
 
 private:
+    volatile bool maintenance = false;
+    bool encoderFault = false;
+    bool storageFault = false;
     Controller controllerInstance = Controller(this);//指向类自身
 
     void CloseLoopControlTick();

@@ -11,9 +11,10 @@ public:
     {
         uint16_t rawAngle;          // raw data，转成mt6816的14位数据
         uint16_t rectifiedAngle;    // calibrated rawAngle data，校准的数据，实际上存放的是对应细分数
+        bool sampleValid;
         bool rectifyValid;//校准成功并写入flash为true
     } AngleData_t;
-    AngleData_t angleData{0};
+    AngleData_t angleData{};
 
 
     /*

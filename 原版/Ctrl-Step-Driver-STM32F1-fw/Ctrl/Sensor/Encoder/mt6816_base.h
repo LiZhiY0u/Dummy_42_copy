@@ -7,7 +7,7 @@
 class MT6816Base : public EncoderBase
 {
 public:
-    explicit MT6816Base(uint16_t *_quickCaliDataPtr) : quickCaliDataPtr(_quickCaliDataPtr), spiRawData(SpiRawData_t{0})
+    explicit MT6816Base(uint16_t *_quickCaliDataPtr) : spiRawData{}, quickCaliDataPtr(_quickCaliDataPtr)
     {
     }
 

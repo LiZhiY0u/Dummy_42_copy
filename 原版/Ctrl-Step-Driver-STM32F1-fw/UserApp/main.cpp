@@ -2,6 +2,10 @@
 #include "configurations.h"
 #include "Platform/Utils/st_hardware.h"
 #include <tim.h>
+#include "protocol_safety.h"
+#include "storage_integrity.h"
+#include <cstring>
+#include <cstddef>
 
 
 /* Component Definitions -----------------------------------------------------*/
@@ -16,11 +20,43 @@ void OnButton2Event(Button::Event _event);
 Led statusLed;
 
 
+namespace {
+constexpr uint32_t ConfigMagic = 0x31474643; // CFG1
+struct ConfigRecord {
+    uint32_t magic, version;
+    BoardConfig_t config;
+    uint32_t crc;
+};
+bool ValidConfig(const BoardConfig_t& c) {
+    using namespace ProtocolSafety;
+    return c.configStatus == CONFIG_OK && c.canNodeId >= 1 && c.canNodeId <= 15 &&
+        c.defaultMode >= Motor::MODE_COMMAND_POSITION && c.defaultMode <= Motor::MODE_COMMAND_CURRENT &&
+        c.currentLimit > 0 && c.currentLimit <= MaxCurrent &&
+        c.velocityLimit > 0 && c.velocityLimit <= MaxVelocity &&
+        c.velocityAcc > 0 && c.velocityAcc <= MaxAcceleration &&
+        c.calibrationCurrent > 0 && c.calibrationCurrent <= MaxCurrent &&
+        c.encoderHomeOffset > -51200 && c.encoderHomeOffset < 51200 &&
+        c.dce_kp >= 0 && c.dce_kp <= 1000 && c.dce_kv >= 0 && c.dce_kv <= 1000 &&
+        c.dce_ki >= 0 && c.dce_ki <= 1000 && c.dce_kd >= 0 && c.dce_kd <= 1000;
+}
+}
+
+extern "C" void FirmwareSafeStop()
+{
+    // Fatal errors may occur before C++ motor initialization. Use direct IO.
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    GPIOA->BRR = GPIO_PIN_2 | GPIO_PIN_3 | GPIO_PIN_4 | GPIO_PIN_5;
+    if (__HAL_RCC_TIM2_IS_CLK_ENABLED()) {
+        TIM2->CCR3 = 0;
+        TIM2->CCR4 = 0;
+    }
+}
+
 /* Main Entry ----------------------------------------------------------------*/
 void Main()
 {
     uint64_t serialNum = GetSerialNumber();
-    uint16_t defaultNodeID = 0;
+    uint16_t defaultNodeID = 1;
     // Change below to fit your situation
     switch (serialNum)
     {
@@ -50,8 +86,12 @@ void Main()
     /*---------- Apply EEPROM Settings ----------*/
     // Setting priority is EEPROM > Motor.h
     EEPROM eeprom;
-    eeprom.get(0, boardConfig);
-    if (boardConfig.configStatus != CONFIG_OK) // 没接收过任何数据的时候用默认配置，use default settings
+    ConfigRecord record{};
+    eeprom.get(0, record);
+    boardConfig = record.config;
+    if (record.magic != ConfigMagic || record.version != 1 ||
+        record.crc != StorageIntegrity::Crc32(&record, offsetof(ConfigRecord, crc)) ||
+        !ValidConfig(boardConfig)) // 没接收过任何数据的时候用默认配置，use default settings
     {
         boardConfig = BoardConfig_t{
             .configStatus = CONFIG_OK,
@@ -69,7 +109,8 @@ void Main()
             .enableMotorOnBoot=false,
             .enableStallProtect=false
         };
-        eeprom.put(0, boardConfig);
+        // Persist lazily after initialization; legacy records reset to defaults.
+        boardConfig.configStatus = CONFIG_COMMIT;
     }
     /*--------------把配置加载到motor专属配置内，每次复位可能不一样----------------------*/
     motor.config.motionParams.encoderHomeOffset = boardConfig.encoderHomeOffset;
@@ -104,8 +145,10 @@ void Main()
     HAL_TIM_Base_Start_IT(&htim1);  // 100Hz
     HAL_TIM_Base_Start_IT(&htim4);  // 20kHz
 
-    if (button1.IsPressed() && button2.IsPressed())//上电按下两个按键则进行编码器校准
+    if (button1.IsPressed() && button2.IsPressed()) {
+        motor.Stop();
         encoderCalibrator.isTriggered = true;
+    }
 
 
     for (;;)
@@ -113,14 +156,33 @@ void Main()
         encoderCalibrator.TickMainLoop();//完成校准后便没用了
 
 
-        if (boardConfig.configStatus == CONFIG_COMMIT)
+        CAN_ProcessPending();
+        UartProcess();
+
+        const bool commit = boardConfig.configStatus == CONFIG_COMMIT;
+        const bool restore = boardConfig.configStatus == CONFIG_RESTORE;
+        if ((commit || restore) && !encoderCalibrator.isTriggered && !motor.HasFault() &&
+            motor.controller->requestMode == Motor::MODE_STOP && motor.controller->modeRunning == Motor::MODE_STOP)
         {
-            boardConfig.configStatus = CONFIG_OK;
-            eeprom.put(0, boardConfig);
-        } else if (boardConfig.configStatus == CONFIG_RESTORE)
-        {
-            eeprom.put(0, boardConfig);
-            HAL_NVIC_SystemReset();
+            motor.BeginMaintenance();
+            if (restore) {
+                // Invalidate the record, then reboot into default settings.
+                record = ConfigRecord{};
+            } else {
+                boardConfig.configStatus = CONFIG_OK;
+                record = ConfigRecord{};
+                record.magic = ConfigMagic;
+                record.version = 1;
+                record.config = boardConfig;
+                record.crc = StorageIntegrity::Crc32(&record, offsetof(ConfigRecord, crc));
+            }
+            eeprom.put(0, record);
+            // Read physical Flash, not EEPROM's RAM cache.
+            if (std::memcmp(reinterpret_cast<const void*>(0x0801fc00), &record, sizeof record) != 0)
+                motor.LatchStorageFault();
+            else if (restore)
+                HAL_NVIC_SystemReset();
+            motor.EndMaintenance();
         }
     }
 }
@@ -141,6 +203,7 @@ extern "C" void Tim4Callback20kHz()
 {
     __HAL_TIM_CLEAR_IT(&htim4, TIM_IT_UPDATE);
 
+    if (motor.IsMaintaining()) { motor.driver->Sleep(); return; }
     if (encoderCalibrator.isTriggered)
         encoderCalibrator.Tick20kHz();
     else
@@ -150,6 +213,7 @@ extern "C" void Tim4Callback20kHz()
 
 void OnButton1Event(Button::Event _event)
 {
+    if (motor.IsMaintaining()) return;
     switch (_event)
     {
         case ButtonBase::UP:
@@ -175,6 +239,7 @@ void OnButton1Event(Button::Event _event)
 
 void OnButton2Event(Button::Event _event)
 {
+    if (motor.IsMaintaining()) return;
     switch (_event)
     {
         case ButtonBase::UP:

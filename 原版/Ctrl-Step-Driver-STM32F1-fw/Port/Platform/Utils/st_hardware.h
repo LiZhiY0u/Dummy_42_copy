@@ -1,7 +1,7 @@
 #ifndef CTRL_STEP_FW_ST_HARDWARE_H
 #define CTRL_STEP_FW_ST_HARDWARE_H
 
-#include <stdint-gcc.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {

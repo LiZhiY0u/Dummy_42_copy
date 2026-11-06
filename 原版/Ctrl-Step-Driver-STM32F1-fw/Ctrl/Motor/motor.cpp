@@ -2,14 +2,71 @@
 #include "motor.h"
 
 #include <cmath>
+#include "interrupt_guard.h"
 
 void Motor::Tick20kHz()
 {
     // 1.Encoder data Update，获取mt6816校准值
+    if (maintenance) { Stop(); return; }
+    if (storageFault) {
+        Stop();
+        controller->state = STATE_STORAGE_FAULT;
+        return;
+    }
     encoder->UpdateAngle();
+    if (!encoder->angleData.sampleValid || encoderFault)
+    {
+        LatchEncoderFault();
+        return;
+    }
 
     // 2.Motor Control Update
     CloseLoopControlTick();
+}
+
+void Motor::BeginMaintenance()
+{
+    InterruptGuard guard;
+    maintenance = true;
+    Stop();
+}
+
+void Motor::EndMaintenance()
+{
+    InterruptGuard guard;
+    Stop();
+    maintenance = false;
+}
+
+void Motor::Stop()
+{
+    controller->requestMode = MODE_STOP;
+    controller->modeRunning = MODE_STOP;
+    controller->goalVelocity = controller->goalCurrent = 0;
+    controller->softVelocity = controller->softCurrent = 0;
+    controller->focCurrent = 0;
+    controller->softNewCurve = true;
+    controller->ClearIntegral();
+    if (driver) driver->Sleep();
+}
+
+void Motor::LatchStorageFault()
+{
+    storageFault = true;
+    Stop();
+    controller->state = STATE_STORAGE_FAULT;
+}
+
+void Motor::LatchEncoderFault()
+{
+    encoderFault = true;
+    controller->requestMode = MODE_STOP;
+    controller->modeRunning = MODE_STOP;
+    controller->goalVelocity = controller->goalCurrent = 0;
+    controller->focCurrent = 0;
+    controller->ClearIntegral();
+    controller->state = STATE_ENCODER_FAULT;
+    if (driver) driver->Sleep();
 }
 
 void Motor::AttachEncoder(EncoderBase *_encoder)
@@ -434,29 +491,25 @@ void Motor::Controller::SetPositionSetPoint(int32_t _pos)
 
 bool Motor::Controller::SetPositionSetPointWithTime(int32_t _pos, float _time)
 {
-    int32_t deltaPos = abs(_pos - realPosition + context->config.motionParams.encoderHomeOffset);
-
-    float pMax = (float)context->config.motionParams.ratedVelocityAcc * _time * _time / 4;
-    if ((float)deltaPos > pMax)
-    {
-        context->config.motionParams.ratedVelocity = boardConfig.velocityLimit;
-        SetPositionSetPoint(_pos);
-
-        return false;
-    }
-    else
-    {
-        float vMax = _time * (float)context->config.motionParams.ratedVelocityAcc;
-        vMax -= (float)context->config.motionParams.ratedVelocityAcc *
-                (sqrtf(_time * _time - 4 * (float)deltaPos /
-                                           (float)context->config.motionParams.ratedVelocityAcc));
-        vMax /= 2;
-
-        context->config.motionParams.ratedVelocity = (int32_t)vMax;
-        SetPositionSetPoint(_pos);
-
-        return true;
-    }
+    if (!std::isfinite(_time) || _time <= 0 || _time > 3600 ||
+        context->config.motionParams.ratedVelocityAcc <= 0) return false;
+    const double delta = std::fabs(static_cast<double>(_pos) - realPosition +
+                                   context->config.motionParams.encoderHomeOffset);
+    const double acceleration = context->config.motionParams.ratedVelocityAcc;
+    const double time = _time;
+    const double discriminant = time*time - 4.0*delta/acceleration;
+    bool feasible = discriminant >= 0;
+    double velocity = boardConfig.velocityLimit;
+    if (feasible && delta > 0)
+        velocity = 2.0 * delta / (time + std::sqrt(discriminant));
+    if (velocity > boardConfig.velocityLimit) { velocity = boardConfig.velocityLimit; feasible = false; }
+    if (velocity < 1) velocity = 1;
+    InterruptGuard guard;
+    if (context->HasFault()) return false;
+    context->config.motionParams.ratedVelocity = static_cast<int32_t>(velocity);
+    SetPositionSetPoint(_pos);
+    SetCtrlMode(MODE_COMMAND_POSITION);
+    return feasible;
 }
 
 void Motor::Controller::SetVelocitySetPoint(int32_t _vel)

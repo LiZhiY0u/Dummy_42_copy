@@ -3,64 +3,36 @@
 bool MT6816Base::Init()
 {
     SpiInit();
-    UpdateAngle();
-
-    // Check if the stored calibration data are valid
     angleData.rectifyValid = true;
-    for (uint32_t i = 0; i < RESOLUTION; i++)
-    {
-        if (quickCaliDataPtr[i] == 0xFFFF)
+    for (int32_t i = 0; i < RESOLUTION; ++i)
+        if (quickCaliDataPtr[i] >= 51200U)
             angleData.rectifyValid = false;
-    }
-
+    UpdateAngle();
     return angleData.rectifyValid;
 }
 
-//获取校准数据
 uint16_t MT6816Base::UpdateAngle()
 {
-    dataTx[0] = (0x80 | 0x03) << 8;// 0x8300
-    dataTx[1] = (0x80 | 0x04) << 8;// 0x8400
-
-    for (uint8_t i = 0; i < 3; i++)
+    angleData.sampleValid = false;
+    for (unsigned attempt = 0; attempt < 3; ++attempt)
     {
-        dataRx[0] = SpiTransmitAndRead16Bits(dataTx[0]);
-        dataRx[1] = SpiTransmitAndRead16Bits(dataTx[1]);
-
-        spiRawData.rawData = ((dataRx[0] & 0x00FF) << 8) | (dataRx[1] & 0x00FF);
-
-        //奇偶校验
-        hCount = 0;
-        for (uint8_t j = 0; j < 16; j++)
-        {
-            if (spiRawData.rawData & (0x0001 << j))
-                hCount++;
-        }
-        if (hCount & 0x01)
-        {
-            spiRawData.checksumFlag = false;
-        } else
-        {
-            spiRawData.checksumFlag = true;
-            break;
-        }
+        const uint16_t high = SpiTransmitAndRead16Bits(0x8300);
+        if (high == UINT16_MAX) return UINT16_MAX;
+        const uint16_t low = SpiTransmitAndRead16Bits(0x8400);
+        if (low == UINT16_MAX) return UINT16_MAX;
+        const uint16_t raw = ((high & 0xffU) << 8) | (low & 0xffU);
+        unsigned parity = 0;
+        for (unsigned bit = 0; bit < 16; ++bit)
+            parity ^= (raw >> bit) & 1U;
+        if (parity || (raw & 2U))
+            continue;
+        angleData.rawAngle = raw >> 2;
+        if (angleData.rectifyValid)
+            angleData.rectifiedAngle = quickCaliDataPtr[angleData.rawAngle];
+        angleData.sampleValid = true;
+        return angleData.rectifiedAngle;
     }
-
-    if (spiRawData.checksumFlag)
-    {
-        spiRawData.rawAngle = spiRawData.rawData >> 2;
-        spiRawData.noMagFlag = (bool) (spiRawData.rawData & (0x0001 << 1));
-    }
-
-    angleData.rawAngle = spiRawData.rawAngle;
-    angleData.rectifiedAngle = quickCaliDataPtr[angleData.rawAngle];
-
-    return angleData.rectifiedAngle;
+    return UINT16_MAX;
 }
 
-
-bool MT6816Base::IsCalibrated()
-{
-    return angleData.rectifyValid;
-}
-
+bool MT6816Base::IsCalibrated() { return angleData.rectifyValid; }

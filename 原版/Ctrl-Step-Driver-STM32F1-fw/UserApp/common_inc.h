@@ -5,9 +5,13 @@
 extern "C" {
 #endif
 /*---------------------------- C Scope ---------------------------*/
-#include "stdint-gcc.h"
+#include <stdint.h>
 
 void Main();
+void UartProcess();
+void OnUartChunk(uint8_t* data, uint16_t length);
+void CAN_ProcessPending();
+void FirmwareSafeStop();
 void OnUartCmd(uint8_t* _data, uint16_t _len);
 void OnCanCmd(uint8_t _cmd, uint8_t* _data, uint32_t _len);
 

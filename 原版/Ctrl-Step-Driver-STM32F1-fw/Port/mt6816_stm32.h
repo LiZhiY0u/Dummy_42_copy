@@ -15,6 +15,9 @@ public:
     {}
 
 
+public:
+    bool Init() override;
+
 private:
     void SpiInit() override;
 

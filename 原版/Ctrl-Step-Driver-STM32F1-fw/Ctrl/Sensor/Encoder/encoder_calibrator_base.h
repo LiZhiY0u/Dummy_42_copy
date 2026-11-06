@@ -19,6 +19,7 @@ public:
         CALI_ERROR_AVERAGE_CONTINUTY,
         CALI_ERROR_PHASE_STEP,
         CALI_ERROR_ANALYSIS_QUANTITY,
+        CALI_ERROR_FLASH,
     } Error_t;
 
     typedef enum
@@ -47,9 +48,10 @@ public:
     }
 
 
-    bool isTriggered;//true则重新开启校准流程
+    volatile bool isTriggered;//true则重新开启校准流程
 
 
+    void Cancel();
     void Tick20kHz();
     void TickMainLoop();
 
@@ -58,7 +60,7 @@ private:
     Motor* motor;
 
     Error_t errorCode;
-    State_t state;
+    volatile State_t state;
     uint32_t goPosition;
     bool goDirection;
     uint16_t sampleCount = 0;
@@ -78,7 +80,7 @@ private:
 
     /***** Port Specified Implements *****/
     virtual void BeginWriteFlash() = 0;
-    virtual void EndWriteFlash() = 0;
+    virtual bool EndWriteFlash() = 0;
     virtual void ClearFlash() = 0;
     virtual void WriteFlash16bitsAppend(uint16_t _data) = 0;
 };
