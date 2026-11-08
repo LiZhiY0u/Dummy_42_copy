@@ -1,0 +1,25 @@
+LOAD %L NOCODE
+printf ("PROBE SP=%08X PC=%08X MSP=%08X PSP=%08X CONTROL=%08X\n", R13, R15, MSP, PSP, CONTROL)
+PROBE SP=200021C8 PC=08000194 MSP=200021C8 PSP=C006089C CONTROL=00000000
+printf("BEFORE\n")
+BEFORE
+DumpStack()
+^
+*** error 34, line 20: undefined identifier
+FillStack()
+^
+*** error 34, line 21: undefined identifier
+printf("FILLED\n")
+DumpStack()
+^
+*** error 34, line 23: undefined identifier
+BK *
+BS 0x08007814,3
+G
+printf("AFTER SP=%08X PC=%08X MSP=%08X CONTROL=%08X\n",R13,R15,MSP,CONTROL)
+AFTER SP=20001F20 PC=08007814 MSP=20001F20 CONTROL=00000000
+DumpStack()
+^
+*** error 34, line 28: undefined identifier
+BK *
+LOG OFF

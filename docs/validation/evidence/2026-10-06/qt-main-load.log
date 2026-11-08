@@ -1,0 +1,130 @@
+********* Start testing of EnvironmentTest *********
+Config: Using QtTest library 5.14.2, Qt 5.14.2 (x86_64-little_endian-llp64 shared (dynamic) release build; by GCC 7.3.0)
+PASS   : EnvironmentTest::initTestCase()
+PASS   : EnvironmentTest::serialModuleIsAvailable()
+PASS   : EnvironmentTest::startsDisconnected()
+PASS   : EnvironmentTest::mockConnectionUpdatesUiAndReconnects()
+PASS   : EnvironmentTest::cleanupTestCase()
+Totals: 5 passed, 0 failed, 0 skipped, 0 blacklisted, 728ms
+********* Finished testing of EnvironmentTest *********
+********* Start testing of ProtocolTest *********
+Config: Using QtTest library 5.14.2, Qt 5.14.2 (x86_64-little_endian-llp64 shared (dynamic) release build; by GCC 7.3.0)
+PASS   : ProtocolTest::initTestCase()
+PASS   : ProtocolTest::crcStandardVector()
+PASS   : ProtocolTest::encodesGoldenFrame()
+PASS   : ProtocolTest::everySplitPoint()
+PASS   : ProtocolTest::concatenatedFrames()
+PASS   : ProtocolTest::payloadContainsHeaderAndNegativeValue()
+PASS   : ProtocolTest::corruptCrcRecovers()
+PASS   : ProtocolTest::oversizeLengthRecovers()
+PASS   : ProtocolTest::noiseAndMaximumPayload()
+PASS   : ProtocolTest::partialFrameTimeout()
+PASS   : ProtocolTest::rejectsVersionAndType()
+PASS   : ProtocolTest::resetDropsPartialFrame()
+PASS   : ProtocolTest::cleanupTestCase()
+Totals: 13 passed, 0 failed, 0 skipped, 0 blacklisted, 3ms
+********* Finished testing of ProtocolTest *********
+********* Start testing of MessageTest *********
+Config: Using QtTest library 5.14.2, Qt 5.14.2 (x86_64-little_endian-llp64 shared (dynamic) release build; by GCC 7.3.0)
+PASS   : MessageTest::initTestCase()
+PASS   : MessageTest::handshakeAndSessionRules()
+PASS   : MessageTest::exactLengthsAndModes()
+PASS   : MessageTest::signedAndUnsignedBounds()
+PASS   : MessageTest::parameterBatchValidation()
+PASS   : MessageTest::rejectsUnknownCommandsAndWrongDirection()
+PASS   : MessageTest::responseStatusAndLengths()
+PASS   : MessageTest::telemetryRoundtripAndAtomicFailure()
+PASS   : MessageTest::infoLayoutAndCompatibility()
+PASS   : MessageTest::independentGoldenFixtures()
+PASS   : MessageTest::fullParameterResponseFitsFrame()
+PASS   : MessageTest::handshakeErrorsBeforeSessionAssignment()
+PASS   : MessageTest::unsolicitedDirectionAndPayloadRules()
+PASS   : MessageTest::taskQueryRecoversLostTerminalEvent()
+PASS   : MessageTest::cleanupTestCase()
+Totals: 15 passed, 0 failed, 0 skipped, 0 blacklisted, 2ms
+********* Finished testing of MessageTest *********
+********* Start testing of SessionTest *********
+Config: Using QtTest library 5.14.2, Qt 5.14.2 (x86_64-little_endian-llp64 shared (dynamic) release build; by GCC 7.3.0)
+PASS   : SessionTest::initTestCase()
+PASS   : SessionTest::lostHelloReplyRetriesIdenticalRequestOnce()
+PASS   : SessionTest::helloRetryIsBoundedWhenAllRepliesAreLost()
+FAIL!  : SessionTest::realSerialReadyTelemetryStopAndReconnect() Compared values are not the same
+   Actual   (((responses.size()))): 0
+   Expected (1)                   : 1
+..\..\..\host\tests\tst_session.cpp(85) : failure location
+PASS   : SessionTest::helloTimeoutIdentifiesNoReplyVersusLoopback()
+PASS   : SessionTest::mockHandshakeRemainsDisabled()
+PASS   : SessionTest::heartbeatRunsDuringSlowHandshake()
+PASS   : SessionTest::queryRetriesOnceWithSameSequence()
+PASS   : SessionTest::motionIsNeverAutomaticallyRetried()
+PASS   : SessionTest::staleSessionAndWrongCommandCannotCompleteRequest()
+PASS   : SessionTest::stopClearsQueuedMotionAndBypassesQuery()
+PASS   : SessionTest::queueIsBoundedAndSequenceAssignedWhenSent()
+PASS   : SessionTest::rebootStopsSessionAndClearsQueue()
+PASS   : SessionTest::rejectsMotionBeforeReadyAndUnknownCapabilities()
+PASS   : SessionTest::invalidPortReportsErrorWithoutOpeningAnything()
+PASS   : SessionTest::lostHeartbeatClosesSessionWithoutResumingMotion()
+PASS   : SessionTest::modelMarksOldSamplesStale()
+PASS   : SessionTest::disableAlsoCancelsMotionAndBlocksEnableUntilConfirmed()
+PASS   : SessionTest::taskResponseMustMatchRequestedId()
+PASS   : SessionTest::mockHelloPreservesWatermarkAndRejectsActiveTakeover()
+PASS   : SessionTest::mockParameterWriteIsAtomicAndReadable()
+PASS   : SessionTest::snapshotsAdvanceWithoutTelemetryAndStopIsVisible()
+PASS   : SessionTest::splitBytesAndCloseCancelDelayedReplies()
+PASS   : SessionTest::cleanupTestCase()
+Totals: 23 passed, 1 failed, 0 skipped, 0 blacklisted, 26013ms
+********* Finished testing of SessionTest *********
+********* Start testing of FirmwareTest *********
+Config: Using QtTest library 5.14.2, Qt 5.14.2 (x86_64-little_endian-llp64 shared (dynamic) release build; by GCC 7.3.0)
+PASS   : FirmwareTest::initTestCase()
+PASS   : FirmwareTest::independentGoldenVectors()
+PASS   : FirmwareTest::everySplitAndBytewiseInput()
+PASS   : FirmwareTest::corruptNoiseAndOversizeRecoverWithinFixedStorage()
+PASS   : FirmwareTest::partialExpiryAndClockWrap()
+PASS   : FirmwareTest::maximumPayloadEmbeddedHeaderAndCapacity()
+PASS   : FirmwareTest::rejectedVersionTypeAndNullInput()
+PASS   : FirmwareTest::switchingModeRequiresStop()
+PASS   : FirmwareTest::encoderAndCalibrationGateEnable()
+PASS   : FirmwareTest::heartbeatExpiryAndFaultRecoveryNeverEnable()
+PASS   : FirmwareTest::oldHeartbeatsAndRunningTakeoverAreRejected()
+PASS   : FirmwareTest::stopAndOwnershipAreExplicit()
+PASS   : FirmwareTest::cleanupTestCase()
+Totals: 13 passed, 0 failed, 0 skipped, 0 blacklisted, 2ms
+********* Finished testing of FirmwareTest *********
+********* Start testing of DispatcherTest *********
+Config: Using QtTest library 5.14.2, Qt 5.14.2 (x86_64-little_endian-llp64 shared (dynamic) release build; by GCC 7.3.0)
+PASS   : DispatcherTest::initTestCase()
+PASS   : DispatcherTest::contractIndependentVectors()
+PASS   : DispatcherTest::contractBoundaryFailures()
+PASS   : DispatcherTest::contractCapabilitiesRequireBackendSupport()
+PASS   : DispatcherTest::duplicatesReturnIdenticalResponseAndNeverExecuteTwice()
+PASS   : DispatcherTest::cacheEvictionAndTtlPreserveWatermark()
+PASS   : DispatcherTest::sequenceAndTtlWrap()
+PASS   : DispatcherTest::expiredSessionAndNewSessionRejectOldMotion()
+PASS   : DispatcherTest::malformedRequestsNeverReachBackendAndConsumeSequence()
+PASS   : DispatcherTest::helloReplayDoesNotResetWatermarkOrRenewHeartbeat()
+PASS   : DispatcherTest::malformedHelloCannotChangeAProcessedSequence()
+PASS   : DispatcherTest::invalidBackendReplyBecomesCachedInternalError()
+PASS   : DispatcherTest::responseWireLayoutsMatchQtDecoder()
+PASS   : DispatcherTest::allRequestLengthsMatchQtValidation()
+PASS   : DispatcherTest::parameterBatchesMatchQtValidation()
+PASS   : DispatcherTest::qtSessionHandshakesWithPortableDispatcher()
+PASS   : DispatcherTest::cleanupTestCase()
+Totals: 17 passed, 0 failed, 0 skipped, 0 blacklisted, 353ms
+********* Finished testing of DispatcherTest *********
+********* Start testing of ControlServiceTest *********
+Config: Using QtTest library 5.14.2, Qt 5.14.2 (x86_64-little_endian-llp64 shared (dynamic) release build; by GCC 7.3.0)
+PASS   : ControlServiceTest::initTestCase()
+PASS   : ControlServiceTest::ackWaitsForControlBoundaryAndUnreadResultsAreNotOverwritten()
+PASS   : ControlServiceTest::stopPreemptsAndCancelsPendingEnable()
+PASS   : ControlServiceTest::wrongSessionStopDoesNotCancelValidEnable()
+PASS   : ControlServiceTest::watchdogAndEncoderFaultCallDriverStopWithoutAnyRequest()
+PASS   : ControlServiceTest::positionEnableLatchesMeasuredPositionAndNeverRelatchesWhileEnabled()
+PASS   : ControlServiceTest::unsupportedModeAndDriverFailureRemainDisabled()
+PASS   : ControlServiceTest::threeLanesAreBoundedAndCompletionPriorityIsStopHeartbeatOrdinary()
+PASS   : ControlServiceTest::stopInFlightBlocksNewEnableUntilItsCompletionIsRead()
+PASS   : ControlServiceTest::correlationIdsAreUniqueAcrossAllOccupiedLanes()
+PASS   : ControlServiceTest::nestedCriticalStateAndDisabledSnapshotArePreserved()
+PASS   : ControlServiceTest::cleanupTestCase()
+Totals: 12 passed, 0 failed, 0 skipped, 0 blacklisted, 2ms
+********* Finished testing of ControlServiceTest *********
