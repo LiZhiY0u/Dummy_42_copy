@@ -24,6 +24,21 @@ Stockpile_FLASH_Typedef stockpile_app_firmware = {STOCKPILE_APP_FIRMWARE_ADDR, S
 Stockpile_FLASH_Typedef stockpile_quick_cali = {STOCKPILE_APP_CALI_ADDR, STOCKPILE_APP_CALI_SIZE, (STOCKPILE_APP_CALI_SIZE / Stockpile_Page_Size), 0};
 Stockpile_FLASH_Typedef stockpile_data = {STOCKPILE_APP_DATA_ADDR, STOCKPILE_APP_DATA_SIZE, (STOCKPILE_APP_DATA_SIZE / Stockpile_Page_Size), 0};
 
+/* STM32F103CB: validate subtraction before addition/multiplication can wrap. */
+static int Stockpile_ValidRegion(const Stockpile_FLASH_Typedef *p)
+{
+	return p && p->begin_add >= 0x08000000U && p->begin_add <= 0x08020000U &&
+		p->area_size <= 0x08020000U - p->begin_add;
+}
+static int Stockpile_ValidWrite(const Stockpile_FLASH_Typedef *p, const void *data, uint32_t num, uint32_t width)
+{
+	uint32_t offset;
+	if (!Stockpile_ValidRegion(p) || (!data && num) || p->asce_write_add < p->begin_add ||
+		(p->asce_write_add % width) != 0U) return 0;
+	offset = p->asce_write_add - p->begin_add;
+	return offset <= p->area_size && num <= (p->area_size - offset) / width;
+}
+
 /**
  * @brief  Flash数据清空
  * @param  stockpile	Flash分区表实例
@@ -32,16 +47,21 @@ Stockpile_FLASH_Typedef stockpile_data = {STOCKPILE_APP_DATA_ADDR, STOCKPILE_APP
 void Stockpile_Flash_Data_Empty(Stockpile_FLASH_Typedef *stockpile)
 {
 	uint32_t count;
-	HAL_FLASH_Unlock(); // LL_FLASH_Unlock();
+	if (!Stockpile_ValidRegion(stockpile) || !stockpile->page_num ||
+		(stockpile->begin_add % Stockpile_Page_Size) != 0U ||
+		stockpile->page_num > stockpile->area_size / Stockpile_Page_Size) return;
+	stockpile->asce_write_add = 0;
+	if (HAL_FLASH_Unlock() != HAL_OK) return;
 	for (count = 0; count < stockpile->page_num; count++)
 	{
 		FLASH_EraseInitTypeDef erase_config;
-		uint32_t page_error;
+		uint32_t page_error = 0xFFFFFFFFU;
 		erase_config.TypeErase = FLASH_TYPEERASE_PAGES;									 // 页擦除
 		erase_config.PageAddress = stockpile->begin_add + (count * Stockpile_Page_Size); // 页起始地址
 		erase_config.NbPages = 1;														 // 擦除页数量
-		HAL_FLASHEx_Erase(&erase_config, &page_error);
-		FLASH_WaitForLastOperation(HAL_MAX_DELAY);
+		/* HAL erase already waits for completion. Do not add an infinite wait. */
+		if (HAL_FLASHEx_Erase(&erase_config, &page_error) != HAL_OK || page_error != 0xFFFFFFFFU)
+			break;
 		CLEAR_BIT(FLASH->CR, FLASH_CR_PER);
 	}
 	HAL_FLASH_Lock(); // LL_FLASH_Lock();
@@ -54,8 +74,8 @@ void Stockpile_Flash_Data_Empty(Stockpile_FLASH_Typedef *stockpile)
  **/
 void Stockpile_Flash_Data_Begin(Stockpile_FLASH_Typedef *stockpile)
 {
-	HAL_FLASH_Unlock(); // LL_FLASH_Unlock();
-	stockpile->asce_write_add = stockpile->begin_add;
+	if (!Stockpile_ValidRegion(stockpile)) return;
+	stockpile->asce_write_add = HAL_FLASH_Unlock() == HAL_OK ? stockpile->begin_add : 0;
 }
 
 /**
@@ -65,6 +85,7 @@ void Stockpile_Flash_Data_Begin(Stockpile_FLASH_Typedef *stockpile)
  **/
 void Stockpile_Flash_Data_End(Stockpile_FLASH_Typedef *stockpile)
 {
+	(void)stockpile;
 	HAL_FLASH_Lock(); // LL_FLASH_Lock();
 }
 
@@ -76,6 +97,7 @@ void Stockpile_Flash_Data_End(Stockpile_FLASH_Typedef *stockpile)
  **/
 void Stockpile_Flash_Data_Set_Write_Add(Stockpile_FLASH_Typedef *stockpile, uint32_t write_add)
 {
+	if (!Stockpile_ValidRegion(stockpile)) return;
 	if (write_add < stockpile->begin_add)
 		return;
 	if (write_add > stockpile->begin_add + stockpile->area_size)
@@ -92,15 +114,13 @@ void Stockpile_Flash_Data_Set_Write_Add(Stockpile_FLASH_Typedef *stockpile, uint
  **/
 void Stockpile_Flash_Data_Write_Data16(Stockpile_FLASH_Typedef *stockpile, uint16_t *data, uint32_t num)
 {
-	if (stockpile->asce_write_add < stockpile->begin_add)
-		return;
-	if ((stockpile->asce_write_add + num * 2) > stockpile->begin_add + stockpile->area_size)
-		return;
+	if (!Stockpile_ValidWrite(stockpile, data, num, 2)) return;
 
 	for (uint32_t i = 0; i < num; i++)
 	{
 		if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, stockpile->asce_write_add, (uint64_t)data[i]) == HAL_OK)
 			stockpile->asce_write_add += 2;
+		else break;
 	}
 }
 
@@ -113,15 +133,13 @@ void Stockpile_Flash_Data_Write_Data16(Stockpile_FLASH_Typedef *stockpile, uint1
  **/
 void Stockpile_Flash_Data_Write_Data32(Stockpile_FLASH_Typedef *stockpile, uint32_t *data, uint32_t num)
 {
-	if (stockpile->asce_write_add < stockpile->begin_add)
-		return;
-	if ((stockpile->asce_write_add + num * 4) > stockpile->begin_add + stockpile->area_size)
-		return;
+	if (!Stockpile_ValidWrite(stockpile, data, num, 4)) return;
 
 	for (uint32_t i = 0; i < num; i++)
 	{
 		if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, stockpile->asce_write_add, (uint64_t)data[i]) == HAL_OK)
 			stockpile->asce_write_add += 4;
+		else break;
 	}
 }
 
@@ -134,15 +152,13 @@ void Stockpile_Flash_Data_Write_Data32(Stockpile_FLASH_Typedef *stockpile, uint3
  **/
 void Stockpile_Flash_Data_Write_Data64(Stockpile_FLASH_Typedef *stockpile, uint64_t *data, uint32_t num)
 {
-	if (stockpile->asce_write_add < stockpile->begin_add)
-		return;
-	if ((stockpile->asce_write_add + num * 8) > stockpile->begin_add + stockpile->area_size)
-		return;
+	if (!Stockpile_ValidWrite(stockpile, data, num, 8)) return;
 
 	for (uint32_t i = 0; i < num; i++)
 	{
 		if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_DOUBLEWORD, stockpile->asce_write_add, (uint64_t)data[i]) == HAL_OK)
 			stockpile->asce_write_add += 8;
+		else break;
 	}
 }
 /*************************************************************** Flash_End ***************************************************************/

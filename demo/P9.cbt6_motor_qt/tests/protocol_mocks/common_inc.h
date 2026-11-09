@@ -1,5 +1,7 @@
 #pragma once
 #include <cstdint>
+extern uint16_t protocolFlashKib;
+#define FLASHSIZE_BASE reinterpret_cast<uintptr_t>(&protocolFlashKib)
 struct UART_HandleTypeDef { unsigned gState; };
 enum { HAL_UART_STATE_READY = 0, HAL_OK = 0 };
 extern UART_HandleTypeDef huart1;
@@ -14,8 +16,9 @@ inline void __enable_irq() {}
 inline void __DMB() {}
 struct FakeController {
     unsigned modeRunning = 0;
-    void StopAndReset() { modeRunning = 0; }
-    bool EnableProtocolMode(uint8_t, int32_t) { return true; }
+    unsigned stops = 0, enables = 0;
+    void StopAndReset() { ++stops; modeRunning = 0; }
+    bool EnableProtocolMode(uint8_t, int32_t) { ++enables; return true; }
     int32_t GetPositionSteps() const { return 0; }
     int32_t Get_est_velocity() const { return 0; }
     int32_t GetCurrentCommandMa() const { return 0; }
@@ -23,13 +26,23 @@ struct FakeController {
 struct Motor {
     enum { MODE_STOP = 0, MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS = 51200 };
     FakeController *controller;
+    struct { struct { int32_t caliCurrent = 1000; } motionParams; } config;
+    Motor(FakeController *value) : controller(value) {}
 };
 extern Motor motor;
 struct FakeEncoder {
     struct { bool sampleValid = true; } angleData;
-    bool IsCalibrated() const { return true; }
+    bool calibrated = true;
+    bool IsCalibrated() const { return calibrated; }
     uint16_t GetConsecutiveErrorCount() const { return 0; }
 };
 extern FakeEncoder mt6816_base;
-struct FakeCalibrator { bool isTriggered = false; };
+struct FakeCalibrator {
+    enum { CALI_DISABLE=0, CALI_FORWARD_PREPARE=1, CALI_CALCULATING=6, CALI_NO_ERROR=0 };
+    bool isTriggered = false;
+    unsigned state = CALI_DISABLE;
+    unsigned errorCode=0, goPosition=0, sampleCount=0, resultNum=0;
+    int rcdX=0, rcdY=0;
+};
 extern FakeCalibrator encoder_calibrator_base;
+typedef FakeCalibrator EncoderCalibratorBase;

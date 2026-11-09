@@ -80,7 +80,7 @@
 #define DAPLINK_ROM_CONFIG_ADMIN_SIZE (0x00000400)	// Flash容量     1K		DAPLink_BL(DAPLINK_ROM_CONFIG_ADMIN)
 // APP_FIRMWARE
 #define STOCKPILE_APP_FIRMWARE_ADDR (0x08000000) //(0x0800C000)		//起始地址
-#define STOCKPILE_APP_FIRMWARE_SIZE (0x0000BC00) // Flash容量    47K    XDrive(APP_FIRMWARE)
+#define STOCKPILE_APP_FIRMWARE_SIZE (0x00017800) // 94KB program; next 1KB is calibration metadata
 // APP_CALI
 #define STOCKPILE_APP_CALI_ADDR (0x08017C00) // 起始地址
 #define STOCKPILE_APP_CALI_SIZE (0x00008000) // Flash容量    32K    XDrive(APP_CALI)(可容纳16K-2byte校准数据-即最大支持14位编码器的校准数据)

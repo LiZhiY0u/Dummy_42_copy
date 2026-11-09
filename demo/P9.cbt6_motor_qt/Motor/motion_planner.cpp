@@ -161,11 +161,6 @@ void MotionPlanner::PositionTracker::Init()
 {
     SetVelocityAcc(context->config->ratedVelocityAcc);
 
-    /*
-     *  Allow to locking-brake when velocity is lower than (speedLockingBrake).
-     *  The best value should be (ratedMoveAcc/1000)
-     */
-    speedLockingBrake = context->config->ratedVelocityAcc / 1000; // 5120
 }
 
 void MotionPlanner::PositionTracker::SetVelocityAcc(int32_t value)
@@ -186,10 +181,15 @@ void MotionPlanner::PositionTracker::NewTask(int32_t real_location, int32_t real
 void MotionPlanner::PositionTracker::CalcSoftGoal(int32_t _goalPosition)
 {
     int32_t deltaPosition = _goalPosition - trackPosition; // 目标位置与跟踪位置的差值
+    // Position is quantized to one subdivision. Once inside that final quantum,
+    // keep the published position while ramping velocity down; otherwise the
+    // fractional integral can carry it one step past the goal on every approach.
+    const bool holdFinalQuantum=deltaPosition==0 && velocityDownAcc>0 &&
+        int64_t(trackVelocity)*trackVelocity<=int64_t(2)*velocityDownAcc;
 
     if (deltaPosition == 0)
     {
-        if ((trackVelocity >= -speedLockingBrake) && (trackVelocity <= speedLockingBrake))
+        if (trackVelocity == 0)
         {
             velocityIntegral = 0;
             trackVelocity = 0;
@@ -333,7 +333,8 @@ void MotionPlanner::PositionTracker::CalcSoftGoal(int32_t _goalPosition)
         }
     }
 
-    CalcPositionIntegral(trackVelocity);
+    if(holdFinalQuantum)positionIntegral=0;
+    else CalcPositionIntegral(trackVelocity);
 
     go_location = (int32_t)trackPosition;
     go_velocity = (int32_t)trackVelocity;

@@ -50,7 +50,7 @@ extern "C" void Main()
         .currentLimit = 1 * 1000,
         .velocityLimit = 30 * motor.MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS,
         .velocityAcc = 1000000,
-        .calibrationCurrent = 2000,
+        .calibrationCurrent = 1000, // bring-up command ceiling; not measured coil current
         .dce_kp = 200,
         .dce_kv = 80,
         .dce_ki = 300,

@@ -1,5 +1,6 @@
 #include "mt6816_base.h"
 #include "spi.h"
+#include "calibration_record.h"
 
 
 // void MT6816Base::SpiInit()
@@ -73,13 +74,10 @@ extern "C" void MT6816Base::Init()
     // UpdateAngle();
 
     // Check if the stored calibration data are valid
-    angleData.rectifyValid = true;
+    const uint16_t flashKib=*reinterpret_cast<volatile const uint16_t *>(uintptr_t(FLASHSIZE_BASE));
+    angleData.rectifyValid = flashKib==128U && stepper::calibration::valid(
+        stepper::calibration::stored(),quickCaliDataPtr);
     angleData.sampleValid = false;
-    for (uint32_t i = 0; i < RESOLUTION; i++)
-    {
-        if (quickCaliDataPtr[i] == 0xFFFF)
-            angleData.rectifyValid = false;
-    }
 }
 void MT6816Base::test()
 {

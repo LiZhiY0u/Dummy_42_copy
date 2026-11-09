@@ -5,9 +5,122 @@
 #include "mt6816_base.h"
 #include "tb67h450_base.h"
 #include "motor.h"
+#include "calibration_record.h"
+#include "calibration_lifecycle.h"
+
+namespace {
+volatile uint32_t storageTask=0, storageProgress=0;
+volatile stepper::calibration::Outcome storageOutcome=stepper::calibration::Outcome::Unknown;
+volatile bool storageWorking=false, storageCancel=false;
+bool calibrationWriteOk = false;
+uint32_t expectedCalibrationCrc = 0xffffffffU;
+uint32_t calibrationCrcWord(uint32_t crc,uint16_t value) {
+    for(unsigned byte=0;byte<2;++byte) {
+        crc ^= uint8_t(value>>(8*byte));
+        for(unsigned bit=0;bit<8;++bit)
+            crc=(crc>>1)^(0xedb88320U & (0U-(crc&1U)));
+    }
+    return crc;
+}
+bool calibrationWriting(const EncoderCalibratorBase &cal) {
+    const volatile EncoderCalibratorBase &live=cal;
+    return live.isTriggered && live.state==EncoderCalibratorBase::CALI_CALCULATING;
+}
+struct CalibrationWriter {
+    uint8_t phase=0; // 0 idle, 1 erase, 2 write, 3 verify, 4 invalidate, 5 header, 6 commit
+    uint32_t page=0, verified=0, actualCrc=0xffffffffU;
+    int32_t x=0,y=0,limit=0,delta=0;
+    bool stepReady=false;
+} calibrationWriter;
+Stockpile_FLASH_Typedef calibrationMetadataArea() {
+    Stockpile_FLASH_Typedef area=stockpile_quick_cali;
+    area.begin_add=uintptr_t(P9_CALIBRATION_RECORD_ADDRESS);
+    area.area_size=Stockpile_Page_Size;area.page_num=1;area.asce_write_add=0;
+    return area;
+}
+bool writeMetadataWord(EncoderCalibratorBase &cal,Stockpile_FLASH_Typedef &area,uint16_t value) {
+    if(!calibrationWriting(cal))return false;
+    const uintptr_t address=uintptr_t(area.asce_write_add);
+    if(address<area.begin_add || address+2>area.begin_add+area.area_size)return false;
+    Stockpile_Flash_Data_Write_Data16(&area,&value,1);
+    return uintptr_t(area.asce_write_add)==address+2 &&
+        *reinterpret_cast<volatile const uint16_t *>(address)==value;
+}
+void finishCalibrationStorage(EncoderCalibratorBase &cal,bool valid) {
+    const uint32_t saved=__get_PRIMASK();
+    __disable_irq();
+    // A full verified physical commit linearizes before a later cancellation.
+    const bool durable=calibrationWriter.phase==6 &&
+        cal.resultNum==uint32_t(mt6816_base.RESOLUTION) &&
+        calibrationWriter.actualCrc==expectedCalibrationCrc &&
+        stepper::calibration::committed(stepper::calibration::stored()) &&
+        stepper::calibration::stored().crc==~expectedCalibrationCrc;
+    const bool accepted=(valid && calibrationWriting(cal)) || durable;
+    const bool cancelled=storageCancel || !calibrationWriting(cal);
+    mt6816_base.angleData.rectifyValid=accepted;
+    storageOutcome=accepted ? stepper::calibration::Outcome::Verified :
+        cancelled ? stepper::calibration::Outcome::Cancelled : stepper::calibration::Outcome::Failed;
+    storageProgress=accepted ? (5U<<8)|100U : (6U<<8)|(storageProgress&255U);
+    storageWorking=false;
+    cal.state=EncoderCalibratorBase::CALI_DISABLE;
+    cal.isTriggered=false;
+    calibrationWriter.phase=0;
+    __set_PRIMASK(saved);
+}
+bool nextCalibrationValue(EncoderCalibratorBase &cal,uint16_t &value) {
+    CalibrationWriter &w=calibrationWriter;
+    // At most 201 source intervals exist, even when an endpoint is empty.
+    for(unsigned skipped=0;skipped<202;++skipped) {
+        if(cal.goDirection ? w.x>cal.rcdX+200 : w.x<cal.rcdX) return false;
+        if(!w.stepReady) {
+            const int32_t a=int32_t(cal.sampleDataAverageForward[cal.CycleMod(w.x,200)]);
+            const int32_t b=int32_t(cal.sampleDataAverageForward[cal.CycleMod(w.x+1,200)]);
+            w.delta=cal.goDirection ? cal.CycleSubtract(b,a,mt6816_base.RESOLUTION)
+                                    : cal.CycleSubtract(a,b,mt6816_base.RESOLUTION);
+            const bool first=cal.goDirection ? w.x==cal.rcdX : w.x==cal.rcdX+200;
+            const bool last=cal.goDirection ? w.x==cal.rcdX+200 : w.x==cal.rcdX;
+            w.y=first?cal.rcdY:0;w.limit=last?cal.rcdY:w.delta;
+            if(w.delta<=0 || w.y<0 || w.y>w.limit || w.limit>w.delta) {
+                calibrationWriteOk=false;return false;
+            }
+            w.stepReady=true;
+        }
+        if(w.y<w.limit) {
+            value=uint16_t(cal.CycleMod(cal.goDirection ? 256*w.x+256*w.y/w.delta
+                : 256*(w.x+1)-256*w.y/w.delta,51200));
+            ++w.y;return true;
+        }
+        w.stepReady=false;w.x+=cal.goDirection?1:-1;
+    }
+    calibrationWriteOk=false;return false;
+}
+}
+
+bool stepper::calibration::beginTask(uint32_t task) {
+    if(!task || storageWorking || calibrationWriter.phase ||
+        (storageTask && storageOutcome==Outcome::Pending))return false;
+    storageTask=task;storageOutcome=Outcome::Pending;storageProgress=1U<<8;
+    storageCancel=false;return true;
+}
+void stepper::calibration::requestCancel(uint32_t task) {
+    if(task!=storageTask || storageOutcome!=Outcome::Pending)return;
+    storageCancel=true;
+    if(!storageWorking && !calibrationWriter.phase) {
+        storageOutcome=Outcome::Cancelled;storageProgress=(6U<<8)|(storageProgress&255U);
+    }
+}
+stepper::calibration::Outcome stepper::calibration::outcome(uint32_t task) {
+    return task && task==storageTask ? storageOutcome : Outcome::Unknown;
+}
+uint16_t stepper::calibration::phasePercent(uint32_t task) {
+    return task && task==storageTask ? uint16_t(storageProgress) : 0;
+}
+bool stepper::calibration::storageBusy() {return storageWorking || calibrationWriter.phase;}
 
 void EncoderCalibratorBase::BeginWriteFlash()
 {
+    calibrationWriteOk = true;
+    expectedCalibrationCrc = 0xffffffffU;
     Stockpile_Flash_Data_Begin(&stockpile_quick_cali);
 }
 
@@ -24,7 +137,19 @@ void EncoderCalibratorBase::ClearFlash()
 // 记录编码器从0开始的对应细分数
 void EncoderCalibratorBase::WriteFlash16bitsAppend(uint16_t _data)
 {
+    const uintptr_t address = uintptr_t(stockpile_quick_cali.begin_add) + resultNum * 2U;
+    if (!calibrationWriting(*this) || !calibrationWriteOk || resultNum >= uint32_t(mt6816_base.RESOLUTION) ||
+        _data >= 51200U || uintptr_t(stockpile_quick_cali.asce_write_add) != address)
+    {
+        calibrationWriteOk = false;
+        return;
+    }
     Stockpile_Flash_Data_Write_Data16(&stockpile_quick_cali, &_data, 1);
+    if (uintptr_t(stockpile_quick_cali.asce_write_add) != address + 2U ||
+        *reinterpret_cast<volatile const uint16_t *>(address) != _data)
+        calibrationWriteOk = false;
+    else
+        expectedCalibrationCrc=calibrationCrcWord(expectedCalibrationCrc,_data);
 }
 
 // 获取样本数据循环平均值
@@ -164,6 +289,22 @@ void EncoderCalibratorBase::CalibrationDataCheck()
 // 默认1000电流，获取到每1.8度对应的编码器数据，包括正转和反转
 void EncoderCalibratorBase::Tick20kHz()
 {
+    // Bring-up policy: configuration is the single current source, capped at
+    // the previous 1A software command until actual coil current is validated.
+    const int32_t current = ::motor.config.motionParams.caliCurrent;
+    if (!isTriggered || current <= 0 || current > 1000)
+    {
+        tb67h450_base.Sleep();
+        state = CALI_DISABLE;
+        isTriggered = false;
+        return;
+    }
+    if (state == CALI_CALCULATING)
+    {
+        // The main-loop writer owns Flash; no table access or output from ISR.
+        tb67h450_base.Sleep();
+        return;
+    }
     if (!mt6816_base.UpdateAngle())
     {
         tb67h450_base.Sleep();
@@ -178,7 +319,7 @@ void EncoderCalibratorBase::Tick20kHz()
     case CALI_DISABLE:
         if (isTriggered)
         {
-            tb67h450_base.SetFocCurrentVector(goPosition, 1000);
+            tb67h450_base.SetFocCurrentVector(goPosition, current);
             goPosition = 51200;
             sampleCount = 0;
             state = CALI_FORWARD_PREPARE;
@@ -187,7 +328,7 @@ void EncoderCalibratorBase::Tick20kHz()
         break;
     case CALI_FORWARD_PREPARE:
         goPosition += AUTO_CALIB_SPEED;
-        tb67h450_base.SetFocCurrentVector(goPosition, 1000);
+        tb67h450_base.SetFocCurrentVector(goPosition, current);
         if (goPosition == 2 * 51200) // 细分2转一圈
         {
             goPosition = 51200;
@@ -211,7 +352,7 @@ void EncoderCalibratorBase::Tick20kHz()
             goPosition += FINE_TUNE_CALIB_SPEED;
         }
 
-        tb67h450_base.SetFocCurrentVector(goPosition, 1000);
+        tb67h450_base.SetFocCurrentVector(goPosition, current);
 
         if (goPosition > (2 * 51200)) // 跑完一圈
         {
@@ -220,7 +361,7 @@ void EncoderCalibratorBase::Tick20kHz()
         break;
     case CALI_BACKWARD_RETURN: // 从2*51200开始
         goPosition += FINE_TUNE_CALIB_SPEED;
-        tb67h450_base.SetFocCurrentVector(goPosition, 1000);
+        tb67h450_base.SetFocCurrentVector(goPosition, current);
 
         if (goPosition ==
             (2 * 51200 + 256 * 20))
@@ -230,7 +371,7 @@ void EncoderCalibratorBase::Tick20kHz()
         break;
     case CALI_BACKWARD_GAP_DISMISS: // 从2 * 51200 + 256 * 20开始
         goPosition -= FINE_TUNE_CALIB_SPEED;
-        tb67h450_base.SetFocCurrentVector(goPosition, 1000);
+        tb67h450_base.SetFocCurrentVector(goPosition, current);
         if (goPosition == (2 * 51200))
         { // 回到起点
             state = CALI_BACKWARD_MEASURE;
@@ -254,14 +395,11 @@ void EncoderCalibratorBase::Tick20kHz()
         {
             goPosition -= FINE_TUNE_CALIB_SPEED;
         }
-        tb67h450_base.SetFocCurrentVector(goPosition, 1000);
+        tb67h450_base.SetFocCurrentVector(goPosition, current);
         if (goPosition < 51200)
         {
             state = CALI_CALCULATING;
         }
-        break;
-    case CALI_CALCULATING: // 回到51200，完成基础校准停机等待处理
-        tb67h450_base.SetFocCurrentVector(0, 0);
         break;
     default:
         break;
@@ -270,139 +408,126 @@ void EncoderCalibratorBase::Tick20kHz()
 
 void EncoderCalibratorBase::TickMainLoop()
 {
-    int32_t dataI32;  // 每相邻两步数据差
-    uint16_t dataU16; // 对应细分数
-
-    if (state != CALI_CALCULATING) // 完成校准后进入
-    {
+    CalibrationWriter &writer=calibrationWriter;
+    if (!calibrationWriting(*this)) {
+        if(writer.phase) finishCalibrationStorage(*this,false);
         return;
     }
-
+    if(storageCancel){finishCalibrationStorage(*this,false);return;}
+    storageWorking=true;
     tb67h450_base.Sleep();
-
-    CalibrationDataCheck();
-
-    if (errorCode == CALI_NO_ERROR) // 正反转数据处理和零点处理成功
-    {
-        int32_t stepX, stepY;
-        resultNum = 0;
-
-        ClearFlash();
-        BeginWriteFlash();
-
-        if (goDirection)
-        {
-            for (stepX = rcdX; stepX < rcdX + 200 + 1; stepX++) // 从零点前一步开始，算出编码器每个数对应的细分数，计算每两个1.8度的数据差
-            {
-                dataI32 = CycleSubtract(
-                    sampleDataAverageForward[CycleMod(stepX + 1, 200)],
-                    sampleDataAverageForward[CycleMod(stepX, 200)],
-                    mt6816_base.RESOLUTION);
-                if (stepX == rcdX)
-                {
-                    for (stepY = rcdY; stepY < dataI32; stepY++)
-                    {
-                        dataU16 = CycleMod(256 * stepX +
-                                               256 * stepY / dataI32,
-                                           51200);
-                        WriteFlash16bitsAppend(dataU16); // 写入编码器数据0对应细分数
-                        resultNum++;
-                    }
-                }
-                else if (stepX == rcdX + 200) // 回到rcdX
-                {
-                    for (stepY = 0; stepY < rcdY; stepY++)
-                    {
-                        dataU16 = CycleMod(256 * stepX +
-                                               256 * stepY / dataI32,
-                                           51200);
-                        WriteFlash16bitsAppend(dataU16);
-                        resultNum++;
-                    }
-                }
-                else
-                {
-                    for (stepY = 0; stepY < dataI32; stepY++)
-                    {
-                        dataU16 = CycleMod(256 * stepX +
-                                               256 * stepY / dataI32,
-                                           51200);
-                        WriteFlash16bitsAppend(dataU16);
-                        resultNum++;
-                    }
-                }
-            }
+    mt6816_base.angleData.rectifyValid=false;
+    if(!writer.phase) {
+        storageProgress=(2U<<8)|50U;
+        if(*reinterpret_cast<volatile const uint16_t *>(uintptr_t(FLASHSIZE_BASE))!=128U) {
+            finishCalibrationStorage(*this,false);return;
         }
-        else
-        {
-            for (stepX = rcdX + 200; stepX > rcdX - 1; stepX--)
-            {
-                dataI32 = CycleSubtract(
-                    sampleDataAverageForward[CycleMod(stepX, 200)],
-                    sampleDataAverageForward[CycleMod(stepX + 1, 200)],
-                    mt6816_base.RESOLUTION);
-                if (stepX == rcdX + 200)
-                {
-                    for (stepY = rcdY; stepY < dataI32; stepY++)
-                    {
-                        dataU16 = CycleMod(
-                            256 * (stepX + 1) -
-                                256 * stepY / dataI32,
-                            51200);
-                        WriteFlash16bitsAppend(dataU16);
-                        resultNum++;
-                    }
-                }
-                else if (stepX == rcdX)
-                {
-                    for (stepY = 0; stepY < rcdY; stepY++)
-                    {
-                        dataU16 = CycleMod(
-                            256 * (stepX + 1) -
-                                256 * stepY / dataI32,
-                            51200);
-                        WriteFlash16bitsAppend(dataU16);
-                        resultNum++;
-                    }
-                }
-                else
-                {
-                    for (stepY = 0; stepY < dataI32; stepY++)
-                    {
-                        dataU16 = CycleMod(
-                            256 * (stepX + 1) -
-                                256 * stepY / dataI32,
-                            51200);
-                        WriteFlash16bitsAppend(dataU16);
-                        resultNum++;
-                    }
-                }
-            }
+        CalibrationDataCheck();
+        if(errorCode!=CALI_NO_ERROR || rcdX<0 || rcdX>=200 || rcdY<0) {
+            finishCalibrationStorage(*this,false);return;
         }
-
+        writer=CalibrationWriter();
+        writer.phase=4;storageProgress=(3U<<8)|50U; // invalidate before touching table
+        resultNum=0;calibrationWriteOk=true;expectedCalibrationCrc=0xffffffffU;
+        return;
+    }
+    if(writer.phase==4) {
+        Stockpile_FLASH_Typedef metadata=calibrationMetadataArea();
+        Stockpile_Flash_Data_Empty(&metadata);
+        bool erased=calibrationWriting(*this);
+        for(unsigned i=0;i<Stockpile_Page_Size/2U && erased;++i)
+            erased=*reinterpret_cast<volatile const uint16_t *>(uintptr_t(metadata.begin_add)+2U*i)==0xffffU;
+        if(!erased){finishCalibrationStorage(*this,false);return;}
+        writer.phase=1;return;
+    }
+    if(writer.phase==1) {
+        storageProgress=(3U<<8)|(50U+5U*writer.page/32U);
+        // One physical page per call. The HAL call itself is still blocking.
+        Stockpile_FLASH_Typedef page=stockpile_quick_cali;
+        const uint32_t pages=uint32_t(mt6816_base.RESOLUTION)*2U/Stockpile_Page_Size;
+        if(writer.page>=pages || stockpile_quick_cali.area_size<uint32_t(mt6816_base.RESOLUTION)*2U) {
+            finishCalibrationStorage(*this,false);return;
+        }
+        page.begin_add+=writer.page*Stockpile_Page_Size;
+        page.area_size=Stockpile_Page_Size;page.page_num=1;page.asce_write_add=0;
+        Stockpile_Flash_Data_Empty(&page);
+        if(!calibrationWriting(*this)) {finishCalibrationStorage(*this,false);return;}
+        for(uint32_t i=0;i<Stockpile_Page_Size/2U;++i)
+            if(*reinterpret_cast<volatile const uint16_t *>(uintptr_t(page.begin_add)+i*2U)!=0xffffU) {
+                finishCalibrationStorage(*this,false);return;
+            }
+        if(++writer.page==pages) {
+            writer.phase=2;writer.x=goDirection?rcdX:rcdX+200;
+            writer.stepReady=false;
+        }
+        return;
+    }
+    if(writer.phase==2) {
+        storageProgress=(3U<<8)|(55U+35U*resultNum/uint32_t(mt6816_base.RESOLUTION));
+        // Unlock only for this bounded chunk, and relock before yielding.
+        Stockpile_Flash_Data_Begin(&stockpile_quick_cali);
+        if(stockpile_quick_cali.asce_write_add!=stockpile_quick_cali.begin_add) {
+            EndWriteFlash();finishCalibrationStorage(*this,false);return;
+        }
+        Stockpile_Flash_Data_Set_Write_Add(&stockpile_quick_cali,
+            stockpile_quick_cali.begin_add+resultNum*2U);
+        for(unsigned n=0;n<32 && resultNum<uint32_t(mt6816_base.RESOLUTION);++n) {
+            uint16_t value=0;
+            if(!nextCalibrationValue(*this,value)) {calibrationWriteOk=false;break;}
+            WriteFlash16bitsAppend(value);
+            if(!calibrationWriting(*this) || !calibrationWriteOk) break;
+            ++resultNum;
+        }
         EndWriteFlash();
-
-        if (resultNum != mt6816_base.RESOLUTION)
-            errorCode = CALI_ERROR_ANALYSIS_QUANTITY;
+        if(!calibrationWriting(*this) || !calibrationWriteOk) {
+            finishCalibrationStorage(*this,false);return;
+        }
+        if(resultNum==uint32_t(mt6816_base.RESOLUTION)) {
+            uint16_t extra=0;
+            if(nextCalibrationValue(*this,extra) || !calibrationWriteOk) {
+                errorCode=CALI_ERROR_ANALYSIS_QUANTITY;
+                finishCalibrationStorage(*this,false);return;
+            }
+            writer.phase=3;writer.verified=0;writer.actualCrc=0xffffffffU;
+            storageProgress=(4U<<8)|90U;
+        }
+        return;
     }
-
-    if (errorCode == CALI_NO_ERROR)
-    {
-        mt6816_base.angleData.rectifyValid = true;
+    if(writer.phase==5 || writer.phase==6) {
+        storageProgress=(4U<<8)|99U;
+        using namespace stepper::calibration;
+        Stockpile_FLASH_Typedef metadata=calibrationMetadataArea();
+        const uint32_t fields[4]={Magic,Version,Bytes,~expectedCalibrationCrc};
+        if(writer.phase==6) {
+            const volatile Record &record=stored();
+            if(record.magic!=Magic || record.version!=Version || record.bytes!=Bytes ||
+                record.crc!=~expectedCalibrationCrc || record.commit!=0xffffffffU) {
+                finishCalibrationStorage(*this,false);return;
+            }
+        }
+        Stockpile_Flash_Data_Begin(&metadata);
+        bool ok=metadata.asce_write_add==metadata.begin_add;
+        if(writer.phase==6)
+            Stockpile_Flash_Data_Set_Write_Add(&metadata,metadata.begin_add+16U);
+        const unsigned words=writer.phase==5?8U:2U;
+        for(unsigned i=0;i<words && ok;++i) {
+            const uint32_t value=writer.phase==5?fields[i/2]:Commit;
+            ok=writeMetadataWord(*this,metadata,uint16_t(value>>(16*(i%2))));
+        }
+        EndWriteFlash();
+        if(!ok || !calibrationWriting(*this)){finishCalibrationStorage(*this,false);return;}
+        if(writer.phase==5){writer.phase=6;return;}
+        finishCalibrationStorage(*this,committed(stored()) && stored().crc==~expectedCalibrationCrc);return;
     }
-    else
-    {
-        mt6816_base.angleData.rectifyValid = false;
-        ClearFlash();
+    // Read at most 128 halfwords, then return to the outer UART loop.
+    storageProgress=(4U<<8)|(90U+9U*writer.verified/uint32_t(mt6816_base.RESOLUTION));
+    for(unsigned n=0;n<128 && writer.verified<resultNum;++n,++writer.verified)
+        writer.actualCrc=calibrationCrcWord(writer.actualCrc,
+            *reinterpret_cast<volatile const uint16_t *>(uintptr_t(stockpile_quick_cali.begin_add)+2U*writer.verified));
+    if(writer.verified==resultNum) {
+        if(writer.actualCrc!=expectedCalibrationCrc)finishCalibrationStorage(*this,false);
+        else writer.phase=5;
     }
-
-    // motor->controller->isStalled = true; // 开启堵转保护，实际上在校准成功后只进一次
-
-    state = CALI_DISABLE; // 返回校准流程起点
-    isTriggered = false;
-
-    // if (errorCode == CALI_NO_ERROR)
-    //     HAL_NVIC_SystemReset(); // 复位芯片
 }
 
 // 取余，把_a限制在_b内

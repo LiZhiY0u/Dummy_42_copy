@@ -1,6 +1,7 @@
 // #include "configurations.h"
 #include "motor.h"
 #include <cmath>
+#include <climits>
 #include "mt6816_base.h"
 #include "configurations.h"
 #include "tb67h450_base.h"
@@ -454,6 +455,38 @@ void Motor::Controller::AddTrajectorySetPoint(int32_t _pos, int32_t _vel)
 void Motor::Controller::SetPositionSetPoint(int32_t _pos)
 {
     goalPosition = _pos + context->config.motionParams.encoderHomeOffset;
+}
+
+bool Motor::Controller::SetProtocolPositionTarget(int32_t position,uint32_t velocity,uint32_t acceleration)
+{
+    if(requestMode!=MODE_COMMAND_POSITION || modeRunning!=MODE_COMMAND_POSITION ||
+       isStalled || !mt6816_base.angleData.sampleValid || !mt6816_base.IsCalibrated())return false;
+    const int64_t internal=int64_t(position)+context->config.motionParams.encoderHomeOffset;
+    const int64_t delta=internal-int64_t(estPosition);
+    const int32_t margin=context->motionPlanner.CONTROL_FREQUENCY-1;
+    if(internal<INT_MIN || internal>INT_MAX || delta<=INT_MIN || delta>INT_MAX ||
+       boardConfig.velocityLimit<=0 || boardConfig.velocityAcc<=0 ||
+       !velocity || !acceleration || velocity>uint32_t(boardConfig.velocityLimit) ||
+       acceleration>uint32_t(boardConfig.velocityAcc) ||
+       velocity>uint32_t(INT_MAX-margin) || acceleration>uint32_t(INT_MAX-margin) ||
+       int64_t(estVelocity)>int64_t(velocity) || int64_t(estVelocity)<-int64_t(velocity))return false;
+    // Legacy tracker converts braking distance to int32 and integrates in int32.
+    const int64_t braking=(int64_t(velocity)*velocity)/(int64_t(2)*acceleration);
+    if(braking>INT_MAX)return false;
+    // All validation above is side-effect free. Publish together in control context.
+    context->config.motionParams.ratedVelocity=int32_t(velocity);
+    context->config.motionParams.ratedVelocityAcc=int32_t(acceleration);
+    context->motionPlanner.positionTracker.Init();
+    goalPosition=int32_t(internal);
+    softNewCurve=true;
+    return true;
+}
+
+bool Motor::Controller::IsProtocolPositionPlanComplete() const
+{
+    return requestMode==MODE_COMMAND_POSITION && modeRunning==MODE_COMMAND_POSITION && !softNewCurve &&
+        context->motionPlanner.positionTracker.go_location==goalPosition &&
+        context->motionPlanner.positionTracker.go_velocity==0;
 }
 
 // 输入目标位置、时间？，设置额定速度，只在一个地方用，不然都是用默认值，还没了解

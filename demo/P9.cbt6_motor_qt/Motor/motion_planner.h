@@ -89,7 +89,6 @@ public:
         int32_t velocityUpAcc = 0;
         int32_t velocityDownAcc = 0;
         float quickVelocityDownAcc = 0;
-        int32_t speedLockingBrake = 0; // 默认5120
         int32_t velocityIntegral = 0;
         int32_t trackVelocity = 0; // 由
         int32_t positionIntegral = 0;

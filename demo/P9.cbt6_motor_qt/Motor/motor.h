@@ -18,24 +18,20 @@ extern "C"
         {
             /****************** Default Configs *******************/
             config.motionParams.encoderHomeOffset = 0;
-            config.motionParams.caliCurrent = 2000;         // (mA)
+            config.motionParams.caliCurrent = 1000;         // bring-up command (mA)
             config.motionParams.ratedCurrent = 1000;        // (mA)
             config.motionParams.ratedCurrentAcc = 2 * 1000; // (mA/s)
             config.motionParams.ratedVelocity = 30 * MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS;
             config.motionParams.ratedVelocityAcc = 1000 * MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS;
 
             config.ctrlParams.stallProtectSwitch = false;
-            config.ctrlParams.pid =
-                Controller::PID_t{
-                    .kp = 5,
-                    .ki = 30,
-                    .kd = 0};
-            config.ctrlParams.dce =
-                Controller::DCE_t{
-                    .kp = 200,
-                    .kv = 80,
-                    .ki = 300,
-                    .kd = 250};
+            config.ctrlParams.pid.kp = 5;
+            config.ctrlParams.pid.ki = 30;
+            config.ctrlParams.pid.kd = 0;
+            config.ctrlParams.dce.kp = 200;
+            config.ctrlParams.dce.kv = 80;
+            config.ctrlParams.dce.ki = 300;
+            config.ctrlParams.dce.kd = 250;
 
             /*****************************************************/
 
@@ -125,6 +121,9 @@ extern "C"
             void SetCurrentSetPoint(int32_t _cur);
             void SetVelocitySetPoint(int32_t _vel);
             void SetPositionSetPoint(int32_t _pos);
+            // Control-cycle owner only; does not enable output or bypass protocol Gate.
+            bool SetProtocolPositionTarget(int32_t position,uint32_t velocity,uint32_t acceleration);
+            bool IsProtocolPositionPlanComplete() const;
             bool SetPositionSetPointWithTime(int32_t _pos, float _time);
             float GetPosition(bool _isLap = false);
             float GetVelocity();

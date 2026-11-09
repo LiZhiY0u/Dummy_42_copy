@@ -5,6 +5,8 @@
 #include "control_service.h"
 #include "protocol_v1.h"
 #include "command_support.h"
+#include "calibration_tasks.h"
+#include "../Encoder/calibration_lifecycle.h"
 #include <string.h>
 
 volatile uint32_t uartDiagRxBytes = 0;
@@ -26,6 +28,10 @@ const uint16_t CMD_HELLO = 0x0001;
 const uint16_t CMD_GET_INFO = 0x0002;
 const uint16_t CMD_GET_STATUS = 0x0003;
 const uint16_t CMD_HEARTBEAT = 0x0004;
+const uint16_t CMD_TASK_QUERY = 0x0005;
+const uint16_t CMD_CALIBRATE_QUERY = 0x0302;
+const uint16_t CMD_CALIBRATE_START = 0x0301;
+const uint16_t CMD_CALIBRATE_CANCEL = 0x0303;
 const uint16_t CMD_ENABLE = 0x0101;
 const uint16_t CMD_DISABLE = 0x0102;
 const uint16_t CMD_STOP = 0x0106;
@@ -77,13 +83,79 @@ public:
     }
 };
 
+uint32_t calibrationSession = 0;
+bool calibrationCapacityOk()
+{
+    return *reinterpret_cast<volatile const uint16_t *>(uintptr_t(FLASHSIZE_BASE))==128U;
+}
+stepper::p9::CalibrationTasks calibrationTasks;
+uint32_t currentCalibrationTask = 0, controlTickTime = 0;
+uint32_t eventTask=0,eventSession=0;
+bool eventStarted=false;
+uint8_t calibrationCancelQueued=0;
+uint16_t eventSequence=0;
+struct { uint32_t session; bool pending; } calibrationStart = {};
+uint16_t calibrationAbortStatus=0;
+bool calibrationAbortRequested=false;
+uint32_t calibrationFaults=0,calibrationFaultEpoch=0;
+void failCalibrationTask(uint32_t id,uint16_t status)
+{
+    if(calibrationTasks.fail(id,status,controlTickTime)) {
+        calibrationFaults|=uint32_t(1)<<5;
+        if(status==9)calibrationFaults|=uint32_t(1)<<3;
+        ++calibrationFaultEpoch;
+    }
+}
+void reconcileCalibrationTask()
+{
+    using stepper::calibration::Outcome;
+    if(!currentCalibrationTask)return;
+    const Outcome result=stepper::calibration::outcome(currentCalibrationTask);
+    if(result==Outcome::Pending)return;
+    if(result==Outcome::Verified) {
+        for(uint8_t phase=1;phase<=4;++phase)
+            calibrationTasks.progress(currentCalibrationTask,phase,99,controlTickTime);
+        calibrationTasks.completeVerified(currentCalibrationTask,controlTickTime);
+    } else if(result==Outcome::Cancelled) {
+        if(calibrationAbortStatus)failCalibrationTask(currentCalibrationTask,calibrationAbortStatus);
+        else calibrationTasks.cancel(currentCalibrationTask,controlTickTime);
+    } else failCalibrationTask(currentCalibrationTask,
+        result==Outcome::Unknown?13:!mt6816_base.angleData.sampleValid?7:
+        encoder_calibrator_base.errorCode?13:9);
+    currentCalibrationTask=0;calibrationSession=0;
+    encoder_calibrator_base.isTriggered=false;
+    encoder_calibrator_base.state=EncoderCalibratorBase::CALI_DISABLE;
+    motor.controller->StopAndReset();
+}
+void cancelCalibrationOutput(uint16_t reason=0)
+{
+    if(currentCalibrationTask) {
+        calibrationAbortRequested=true;
+        if(reason)calibrationAbortStatus=reason;
+        if(calibrationStart.pending) {
+            calibrationTasks.cancel(currentCalibrationTask,controlTickTime);
+            currentCalibrationTask=0;
+        } else {
+            stepper::calibration::requestCancel(currentCalibrationTask);
+            reconcileCalibrationTask();
+        }
+    }
+    calibrationStart.pending = false;
+    encoder_calibrator_base.isTriggered = false;
+    encoder_calibrator_base.state = EncoderCalibratorBase::CALI_DISABLE;
+    calibrationSession = 0;
+    motor.controller->StopAndReset();
+}
+
 class P9ControlDriver : public stepper::ControlDriver
 {
 public:
     uint8_t supportedModes() const { return 0x07; }
-    void disableAndReset() { motor.controller->StopAndReset(); }
+    void disableAndReset() { cancelCalibrationOutput(); }
     bool enable(uint8_t mode, int32_t initialPosition)
     {
+        if(calibrationFaults || currentCalibrationTask || calibrationStart.pending || encoder_calibrator_base.isTriggered ||
+            stepper::calibration::storageBusy())return false;
         return motor.controller->EnableProtocolMode(mode, initialPosition);
     }
 };
@@ -92,6 +164,85 @@ ArmCriticalSection critical;
 P9ControlDriver driver;
 stepper::ControlMailbox mailbox(critical);
 stepper::ControlService controlService(mailbox, critical, driver);
+// Accept only; the control tick owns activation and terminal transitions.
+uint16_t queueCalibrationStart(uint32_t token,const stepper::ControlSnapshot &state,uint32_t &id)
+{
+    const uint32_t saved=critical.enter();
+    uint16_t status=1;
+    if(!token || token!=state.session) status=11;
+    else if(!state.encoderValid) status=7;
+    else if(calibrationFaults || state.faultBits || state.mode!=3) status=5;
+    else if(motor.config.motionParams.caliCurrent<=0 || motor.config.motionParams.caliCurrent>1000) status=4;
+    else if(!calibrationCapacityOk()) status=9;
+    else if(calibrationCancelQueued || calibrationStart.pending || encoder_calibrator_base.isTriggered || currentCalibrationTask ||
+            stepper::calibration::storageBusy()) status=8;
+    if(status==1) {
+        calibrationTasks.session(token);
+        id=calibrationTasks.accept(token,HAL_GetTick());
+        if(!id) status=8;
+        else {
+            currentCalibrationTask=id;
+            calibrationAbortStatus=0;calibrationAbortRequested=false;
+            calibrationStart.session=token;
+            calibrationStart.pending=true;
+        }
+    }
+    critical.leave(saved);return status;
+}
+// Single control-tick owner; avoid placing a full snapshot on the IRQ stack.
+__attribute__((noinline)) void enforceCalibrationSession()
+{
+    if (!encoder_calibrator_base.isTriggered && !calibrationStart.pending) {
+        if(currentCalibrationTask) {
+            if(stepper::calibration::outcome(currentCalibrationTask)==stepper::calibration::Outcome::Pending) {
+                if(!calibrationAbortRequested)
+                    calibrationAbortStatus=mt6816_base.angleData.sampleValid?13:7;
+                stepper::calibration::requestCancel(currentCalibrationTask);
+            }
+            reconcileCalibrationTask();
+        }
+        calibrationSession = 0;
+        return;
+    }
+    static stepper::ControlSnapshot state;
+    state = controlService.snapshot();
+    if(calibrationStart.pending) {
+        calibrationStart.pending=false;
+        uint16_t error=0;
+        if(!state.session || state.session!=calibrationStart.session) error=11;
+        else if(!state.encoderValid) error=7;
+        else if(calibrationFaults || state.faultBits || state.mode!=3 || motor.controller->modeRunning!=Motor::MODE_STOP) error=5;
+        else if(motor.config.motionParams.caliCurrent<=0 || motor.config.motionParams.caliCurrent>1000) error=4;
+        else if(!calibrationCapacityOk()) error=9;
+        else if(!stepper::calibration::beginTask(currentCalibrationTask)) error=8;
+        if(error) {
+            failCalibrationTask(currentCalibrationTask,error);
+            currentCalibrationTask=0;cancelCalibrationOutput();return;
+        }
+        motor.controller->StopAndReset();
+        encoder_calibrator_base.state=EncoderCalibratorBase::CALI_DISABLE;
+        encoder_calibrator_base.errorCode=EncoderCalibratorBase::CALI_NO_ERROR;
+        encoder_calibrator_base.goPosition=0;
+        encoder_calibrator_base.sampleCount=0;
+        encoder_calibrator_base.rcdX=encoder_calibrator_base.rcdY=0;
+        encoder_calibrator_base.resultNum=0;
+        calibrationSession=state.session;
+        calibrationTasks.progress(currentCalibrationTask,1,0,controlTickTime);
+        encoder_calibrator_base.isTriggered=true; // set last, after all checks
+    }
+    if (!calibrationSession)
+        calibrationSession = state.session;
+    if (!state.session || state.session != calibrationSession ||
+        state.faultBits || !state.encoderValid)
+        cancelCalibrationOutput(!state.encoderValid?7:!state.session?11:5);
+    if(currentCalibrationTask) {
+        const uint16_t progress=stepper::calibration::phasePercent(currentCalibrationTask);
+        const uint8_t phase=uint8_t(progress>>8),percent=uint8_t(progress);
+        for(uint8_t p=1;p<=phase && p<=4;++p)
+            calibrationTasks.progress(currentCalibrationTask,p,percent,controlTickTime);
+        reconcileCalibrationTask();
+    }
+}
 stepper::Parser parser;
 
 volatile uint16_t rxHead = 0;
@@ -112,6 +263,7 @@ volatile uint16_t txDropCount = 0;
 
 struct Pending
 {
+    uint32_t faultEpoch;
     bool valid;
     uint32_t requestId;
     stepper::Frame request;
@@ -288,6 +440,18 @@ void encodeSnapshot(const stepper::ControlSnapshot &snapshot, uint8_t *p)
     write32(p + 32, uint32_t(snapshot.positionError));
     write32(p + 36, snapshot.faultBits);
     p[40] = snapshot.state;
+    const uint32_t saved=critical.enter();
+    const uint32_t faults=snapshot.faultBits|calibrationFaults;
+    write32(p+36,faults);
+    if(faults)p[40]=4;
+    if(currentCalibrationTask && !faults && snapshot.session==calibrationSession)
+        p[40]=3; // CALIBRATING, including storage cleanup; never implies ordinary ENABLE.
+    if(encoder_calibrator_base.isTriggered && encoder_calibrator_base.state>EncoderCalibratorBase::CALI_DISABLE &&
+       encoder_calibrator_base.state<EncoderCalibratorBase::CALI_CALCULATING && !faults) {
+        write32(p+24,uint32_t(motor.config.motionParams.caliCurrent));
+        write32(p+28,uint32_t(motor.config.motionParams.caliCurrent));
+    }
+    critical.leave(saved);
     p[41] = snapshot.mode;
     p[42] = snapshot.calibrated;
     p[43] = snapshot.encoderValid;
@@ -342,11 +506,13 @@ bool queueControl(const stepper::Frame &request, stepper::ControlKind kind,
     if (!requestId)
         requestId = nextRequestId++;
     stepper::ControlCommand command = {kind, mode, requestId, session};
+    const uint32_t faultEpoch=calibrationFaultEpoch; // capture before IRQ can execute this request
     if (!mailbox.submit(command))
         return false;
     pending[freeSlot].valid = true;
     pending[freeSlot].requestId = requestId;
     pending[freeSlot].request = request;
+    pending[freeSlot].faultEpoch=faultEpoch;
     // Reserve the sequence on acceptance, not on asynchronous completion.
     if (kind != stepper::ControlKind::Hello || session == cachedSession)
         highWater = request.sequence;
@@ -424,6 +590,7 @@ __attribute__((noinline)) void dispatchFrame(const stepper::Frame &request)
     {
         if (read32(request.payload) != activeSession &&
             (encoder_calibrator_base.isTriggered ||
+             currentCalibrationTask || calibrationStart.pending || stepper::calibration::storageBusy() ||
              motor.controller->modeRunning != Motor::MODE_STOP))
         {
             sendAndRemember(request, makeResponse(request, STATUS_WRONG_STATE), nowMs);
@@ -437,10 +604,58 @@ __attribute__((noinline)) void dispatchFrame(const stepper::Frame &request)
 
     switch (request.command)
     {
+    case CMD_CALIBRATE_START:
+    {
+        uint32_t id=0;
+        const uint16_t status=eventTask?STATUS_BUSY:queueCalibrationStart(activeSession,snapshot,id);
+        setStatus(response,status);
+        if(status==1) {
+            response.length=6;write32(response.payload+2,id);
+            eventTask=id;eventSession=activeSession;eventStarted=false;
+        }
+        break;
+    }
+    case CMD_CALIBRATE_CANCEL:
+    {
+        static stepper::p9::CalibrationTask task;
+        const uint32_t saved=critical.enter();
+        const bool found=calibrationTasks.query(activeSession,read32(request.payload),task);
+        critical.leave(saved);
+        if(!found)setStatus(response,4);
+        else if(task.taskPhase>=4) {
+            response.length=6;write32(response.payload+2,task.id);
+        } else {
+            if(queueControl(request,stepper::ControlKind::Stop,3,activeSession)) {
+                ++calibrationCancelQueued;return;
+            }
+            setStatus(response,STATUS_BUSY);
+        }
+        break;
+    }
     case CMD_GET_INFO:
         appendInfo(response);
         sendAndRemember(request, response, nowMs);
         return;
+    case CMD_TASK_QUERY:
+    case CMD_CALIBRATE_QUERY:
+    {
+        // Copy under IRQ exclusion; serialize outside the short critical section.
+        static stepper::p9::CalibrationTask task;
+        const uint32_t saved=critical.enter();
+        const bool found=calibrationTasks.query(activeSession,read32(request.payload),task);
+        critical.leave(saved);
+        if(!found) setStatus(response,4);
+        else if(request.command==CMD_TASK_QUERY) {
+            static uint8_t body[12];
+            stepper::p9::encodeTaskQuery(task,body);
+            response.length=14;memcpy(response.payload+2,body,sizeof(body));
+        } else {
+            static uint8_t body[13];
+            stepper::p9::encodeCalibrationQuery(task,body);
+            response.length=15;memcpy(response.payload+2,body,sizeof(body));
+        }
+        break;
+    }
     case CMD_GET_STATUS:
         if (queueControl(request, stepper::ControlKind::ReadState, 3, activeSession))
             return;
@@ -467,6 +682,9 @@ __attribute__((noinline)) void dispatchFrame(const stepper::Frame &request)
             response = makeResponse(request, STATUS_BUSY);
         break;
     case CMD_CLEAR_FAULT:
+        if(currentCalibrationTask || calibrationStart.pending || stepper::calibration::storageBusy()) {
+            setStatus(response,STATUS_WRONG_STATE);break;
+        }
         if (queueControl(request, stepper::ControlKind::ClearFault, 3, activeSession))
             return;
         else
@@ -513,9 +731,21 @@ __attribute__((noinline)) void finishControls(uint32_t nowMs)
             continue;
         static stepper::Frame request;
         request = pending[slot].request;
+        const uint32_t clearEpoch=pending[slot].faultEpoch;
         pending[slot].valid = false;
+        if(request.command==CMD_CALIBRATE_CANCEL && calibrationCancelQueued)--calibrationCancelQueued;
         stepper::Frame &response = makeResponse(request,
             completion.canceled ? STATUS_WRONG_STATE : completion.status);
+        if(request.command==CMD_CLEAR_FAULT && !completion.status && !completion.canceled) {
+            const uint32_t saved=critical.enter();
+            if(clearEpoch==calibrationFaultEpoch && !currentCalibrationTask &&
+               !stepper::calibration::storageBusy() && mt6816_base.angleData.sampleValid &&
+               motor.controller->modeRunning==Motor::MODE_STOP)
+                calibrationFaults=0;
+            else completion.status=STATUS_WRONG_STATE;
+            critical.leave(saved);
+            setStatus(response,completion.status);
+        }
         if (!completion.status && !completion.canceled)
         {
             if (request.command == CMD_HELLO)
@@ -539,6 +769,9 @@ __attribute__((noinline)) void finishControls(uint32_t nowMs)
             {
                 response.length = 3;
                 response.payload[2] = request.payload[0];
+            }
+            else if(request.command==CMD_CALIBRATE_CANCEL) {
+                response.length=6;write32(response.payload+2,read32(request.payload));
             }
             else
                 appendSnapshot(response, completion.snapshot);
@@ -586,6 +819,32 @@ void transmitNext()
         activeTx = -1;
         incrementDrop();
         critical.leave(saved);
+    }
+}
+
+__attribute__((noinline)) void emitCalibrationEvent()
+{
+    if(!eventTask)return;
+    if(controlService.snapshot().session!=eventSession){eventTask=0;return;}
+    static stepper::p9::CalibrationTask task;
+    const uint32_t saved=critical.enter();
+    const bool found=calibrationTasks.query(eventSession,eventTask,task);
+    critical.leave(saved);
+    if(!found){eventTask=0;return;}
+    const bool terminal=task.taskPhase>=4;
+    if(!terminal && (eventStarted || task.phase==0))return;
+    static stepper::Frame frame;
+    memset(&frame,0,sizeof(frame));
+    frame.type=3;frame.command=0x0501;frame.session=eventSession;
+    frame.sequence=uint16_t(eventSequence+1);frame.length=12;
+    write32(frame.payload,task.id);
+    frame.payload[4]=terminal?task.taskPhase:1;
+    write16(frame.payload+6,task.result==1?0:task.result);
+    write32(frame.payload+8,task.timestamp);
+    if(enqueueFrame(frame,false)) {
+        ++eventSequence;
+        if(terminal)eventTask=0;
+        else eventStarted=true;
     }
 }
 
@@ -637,12 +896,14 @@ void UartProtocolPoll(uint32_t nowMs)
     else
         parser.feed(0, 0, nowMs, handleFrame, 0);
     finishControls(nowMs);
+    emitCalibrationEvent();
     emitTelemetry(nowMs);
     transmitNext();
 }
 
 void UartProtocolControlTick(uint32_t nowMs)
 {
+    controlTickTime = nowMs;
     ++uartDiagControlTicks;
     // Called from TIM4 in normal mode OR main in diagnostic mode, never both.
     static stepper::Measurement measurement;
@@ -655,6 +916,7 @@ void UartProtocolControlTick(uint32_t nowMs)
     measurement.encoderErrorCount = mt6816_base.GetConsecutiveErrorCount();
     measurement.txDropCount = txDropCount;
     controlService.tick(nowMs, measurement);
+    enforceCalibrationSession();
 }
 
 void UartProtocolOnRx(const uint8_t *data, uint16_t length)
