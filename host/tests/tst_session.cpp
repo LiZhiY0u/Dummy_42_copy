@@ -73,13 +73,30 @@ private slots:
             QCOMPARE(session.state(),ConnectionState::Ready);
             QVERIFY(snapshots.size()>=200);
             quint32 previous=0;
+            unsigned validEncoderSamples=0, calibratedSamples=0;
+            quint32 observedFaults=0;
+            quint16 maxEncoderErrors=0;
             for(const auto &args:snapshots) {
                 const Snapshot s=qvariant_cast<Snapshot>(args[0]);
+                validEncoderSamples+=s.encoderValid ? 1U : 0U;
+                calibratedSamples+=s.calibrated ? 1U : 0U;
+                observedFaults|=s.faultBits;
+                maxEncoderErrors=qMax(maxEncoderErrors,s.encoderErrorCount);
                 QVERIFY(s.sampleCounter>previous);
                 previous=s.sampleCounter;
                 QCOMPARE(s.mode,ControlMode::None);
                 QCOMPARE(s.currentCommandMa,qint32(0));
                 QCOMPARE(s.txDropCount,quint16(0));
+            }
+            if(qEnvironmentVariableIsSet("STEPPER_ENCODER_PROBE")) {
+                qInfo("ENCODER round=%u samples=%d valid=%u calibrated=%u faultOR=0x%08x maxErrors=%u",
+                      round+1,snapshots.size(),validEncoderSamples,calibratedSamples,
+                      unsigned(observedFaults),unsigned(maxEncoderErrors));
+                QVERIFY(session.submit(Command::ClearFault)!=0);
+                QTRY_COMPARE(responses.size(),1);
+                const Response cleared=qvariant_cast<Response>(responses.first()[0]);
+                qInfo("ENCODER clearFaultStatus=%u",unsigned(cleared.status));
+                responses.clear();
             }
             QVERIFY(session.submit(Command::Stop)!=0);
             QTRY_COMPARE(responses.size(),1);

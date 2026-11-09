@@ -21,6 +21,10 @@
 - Before continuing, read `docs/README.md`, `docs/项目进度记录.md` and the relevant
   protocol/validation documents. Treat historical entries as dated evidence,
   not as current source truth.
+- Read and maintain `docs/开发交接.md` for the current development handoff,
+  repository paths, pending decisions and uncommitted evidence. Recheck Git
+  before resuming. The independent firmware repository at
+  `build/firmware-main` is not disposable build output; preserve it during cleanup.
 - After substantive work, update the current ledger, applicable function and
   protocol manuals, and append execution history. Follow
   `docs/文档维护说明.md`; retain historical failures and corrections.

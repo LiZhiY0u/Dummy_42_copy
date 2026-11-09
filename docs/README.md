@@ -6,6 +6,8 @@
 
 ## 按需求阅读
 
+其他agent接手请先读：[开发交接与当前断点](开发交接.md)，再核对实际Git与日志。
+
 | 要了解什么 | 文档 | 定位 |
 | --- | --- | --- |
 | 当前做到哪、问题、下一步 | [项目进度记录](项目进度记录.md) | 当前状态的唯一台账；历史追加保留 |
@@ -20,6 +22,38 @@
 | 两端Git基线与提交规则 | [版本管理](版本管理.md) | 本地独立仓库、源码/产物边界、回归与提交要求 |
 
 ## 最近状态摘要
+
+- [11月10日短目标收敛修复](validation/2026-11-10-position-short-fix.md)：30组短行程、真实控制器及STOP/失联离线回归通过，正常ARM/静态栈门槛通过，未烧录/运动。
+
+- [11月10日控制器目标适配](validation/2026-11-10-position-controller-adapter.md)：真实控制器离线测试/正常ARM通过；新发现短目标5秒未收敛，未解决且不开放MOVE_ABS，未实机。
+
+- [11月10日真实规划器联动](validation/2026-11-10-position-planner-integration.md)：正反向/STOP/失联四个离线场景通过，完整控制器/串口尚未接入，未实机。
+
+- [11月10日位置任务核心](validation/2026-11-10-position-task-core.md)：纯软件限幅/到位/超时/取消测试通过，未接串口或控制器；继续离线，不因暂缓电压处理而恢复实机输出。
+
+- [11月10日校准复位保持](validation/2026-11-10-calibration-reset-retention.md)：复位后校准有效且禁用，容量寄存器128KB/提交头实读。探针目标电压读数异常，实际供电待核对，暂不继续实际运动。
+
+- [11月10日接线修正后校准成功](validation/2026-11-10-calibration-rewired-hardware.md)：task2约10.36s完成、verified1，最终禁用/校准有效/采样有效/无故障、STOP确认。未验证重启保持或普通运动目标。
+
+- [11月10日烧录及首次校准](validation/2026-11-10-calibration-first-hardware.md)：新正常候选7D5932DF已Verify OK烧录，cap0x1A0；首次校准约7.3s分析失败、STOP确认，故障保留。未校准成功，具体原因待诊断，不自动重试。
+
+- [11月10日COM4实机检查](validation/2026-11-10-device-basics-hardware.md)：串口/STOP/禁用状态通过，采样有效、校准无效、能力0x180。未烧录或运动，准确固件身份/容量未读。
+
+- [11月10日基础验证工具](validation/2026-11-10-device-basics-tool.md)：新增显式端口的状态/STOP脚本，离线自检通过；未开串口，端口归属待确认，无校准或烧录入口。
+
+- [11月10日真实存储-UART联合测试](validation/2026-11-10-calibration-uart-integration.md)：四场景新编译通过，不再使用假Outcome；硬件/采集仍模拟，未烧录或运动。下一步实机验证准备。
+
+- [11月10日交错与拥塞回归](validation/2026-11-10-calibration-interleaving.md)：21UART场景通过；旧清除不误清新失败，拥塞后终态事件保留。仅测试/文档，未重建ARM或实机。
+
+- [11月10日校准故障与快照](validation/2026-11-10-calibration-faults.md)：失败锁存/显式清除、采集指令电流反馈及取消竞争，20UART场景和正常ARM/静态栈门槛通过；未烧录/运动。
+
+- [11月10日串口校准接入](validation/2026-11-10-calibration-wire.md)：正常13请求/0x1A0，19UART场景、四配置ARM及静态栈门槛通过。尚未烧录或运动，失败锁存/电流快照及实机验证待完成。
+
+- [11月9日串口任务查询](validation/2026-11-09-calibration-query.md)：两查询接入，当前11请求/0x180；18UART场景及正常ARM/静态栈门槛通过。启动/取消/事件未接，未烧录。
+
+- [11月9日校准任务与存储终态联动](validation/2026-11-09-calibration-lifecycle.md)：17UART场景及真实存储回归、正常ARM构建和静态栈门槛通过；外部校准命令仍未开放，未烧录/运动。
+
+- [11月8日重新烧录与基础复测](validation/2026-11-08-basic-reflash.md)：正常main固件全量构建及ST-Link烧录校验通过，COM4禁用通信99/0/0，两轮STOP和重连正常；未执行运动。
 
 - [11月8日远程优化分支初查](validation/2026-11-08-remote-work-review.md)：已拉取work2780ca9，六个主机程序通过；它优化原版工程，仍使用旧串口，不兼容当前Qt V1，尚未合并或移植。
 
